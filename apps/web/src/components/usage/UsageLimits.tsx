@@ -111,7 +111,7 @@ export function usePaceMark(timeLeft: number | null) {
   return [setBar, roomy ? paceMarkStyles(timeLeft) : null] as const;
 }
 
-function WindowBar({
+export function WindowBar({
   color,
   window,
   now,

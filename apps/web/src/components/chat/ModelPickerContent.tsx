@@ -63,6 +63,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
+import { ModelPickerUsageLimits } from "./ModelPickerUsageLimits";
 
 type ModelPickerItem = {
   slug: string;
@@ -1033,6 +1034,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               onRequestClose={onRequestClose}
               onOpenProviderSetup={onOpenProviderSetup}
             />
+            {selectedEntry && !isSearching ? (
+              <ModelPickerUsageLimits entry={selectedEntry} />
+            ) : null}
           </div>
         </Combobox>
       </div>
