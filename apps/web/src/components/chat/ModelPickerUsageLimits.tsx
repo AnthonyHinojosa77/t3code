@@ -20,7 +20,7 @@ export function ModelPickerUsageLimits({ entry }: { readonly entry: ProviderInst
         const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
         return (
           <div key={window.id} className="contents">
-            <span className="truncate text-muted-foreground">{window.label}</span>
+            <span className="break-words text-muted-foreground">{window.label}</span>
             <WindowBar color={color} window={window} now={now} />
             <span className="text-end font-medium text-foreground tabular-nums">
               {remainingPercent(window)}% left
