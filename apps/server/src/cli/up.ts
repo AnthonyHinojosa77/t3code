@@ -1,6 +1,7 @@
 import * as NodeUtil from "node:util";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NetService from "@t3tools/shared/Net";
 import {
   isTailscaleIpv4Address,
   readTailscaleStatus,
@@ -18,6 +19,7 @@ import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import * as BootService from "../cloud/bootService.ts";
 import { SERVICE_ENV_FILE } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
+import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { renderTerminalQrCode } from "../startupAccess.ts";
 import {
   isSupportedTailscaleVersion,
@@ -179,6 +181,21 @@ const TAGGING_TIP = [
   "then run: sudo tailscale set --advertise-tags=tag:server",
 ].join("\n");
 
+/**
+ * Discovery probes only the default port, so `t3 up` pins it rather than let
+ * the server fall back to the next free one. A port the user set is kept.
+ */
+export const upPortCheck = (input: {
+  readonly configuredPort: string | undefined;
+  readonly defaultPortFree: boolean;
+  readonly defaultPortHeldByThisHome: boolean;
+}): "ok" | "taken" | "custom" => {
+  if (input.configuredPort !== undefined) {
+    return Number(input.configuredPort) === ServerConfig.DEFAULT_PORT ? "ok" : "custom";
+  }
+  return input.defaultPortFree || input.defaultPortHeldByThisHome ? "ok" : "taken";
+};
+
 const runUp = Effect.fn("cli.up")(function* (flags: {
   readonly baseDir: Option.Option<string>;
   readonly owner: Option.Option<string>;
@@ -202,6 +219,31 @@ const runUp = Effect.fn("cli.up")(function* (flags: {
     const current = (yield* fs.exists(serviceEnvPath))
       ? yield* fs.readFileString(serviceEnvPath)
       : "";
+    // The same parser the service launcher reads the file with.
+    const serviceEnv = NodeUtil.parseEnv(current);
+    const configuredPort = serviceEnv.T3CODE_PORT;
+    const net = yield* NetService.NetService;
+    const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    const portCheck = upPortCheck({
+      configuredPort,
+      defaultPortFree:
+        configuredPort === undefined &&
+        (yield* net.canListenOnHost(ServerConfig.DEFAULT_PORT, "0.0.0.0")),
+      defaultPortHeldByThisHome:
+        Option.isSome(runtime) &&
+        runtime.value.port === ServerConfig.DEFAULT_PORT &&
+        isProcessAlive(runtime.value.pid),
+    });
+    if (portCheck === "taken") {
+      return yield* new TailscaleUpError({
+        reason: `Port ${ServerConfig.DEFAULT_PORT} is in use by another program. Free it, or set T3CODE_PORT in ${serviceEnvPath} and add this box by name and port.`,
+      });
+    }
+    if (portCheck === "custom") {
+      yield* Console.warn(
+        `${serviceEnvPath} sets T3CODE_PORT=${configuredPort}. Other devices find boxes only on port ${ServerConfig.DEFAULT_PORT}, so add this one by name and port.`,
+      );
+    }
     // Settings land before the service starts, so it never runs with sign-in half set up.
     yield* fs.makeDirectory(config.baseDir, { recursive: true });
     yield* fs.writeFileString(
@@ -209,13 +251,12 @@ const runUp = Effect.fn("cli.up")(function* (flags: {
       upsertServiceEnv(current, {
         T3CODE_TAILSCALE_SIGN_IN: "1",
         T3CODE_TAILSCALE_ONLY: "1",
+        T3CODE_PORT: configuredPort ?? String(ServerConfig.DEFAULT_PORT),
         // The user ID, never the login: logins can be renamed.
         T3CODE_TAILSCALE_OWNER: tagged ? owner.userId : undefined,
         ...(flags.https ? { T3CODE_TAILSCALE_SERVE: "1" } : {}),
       }),
     );
-    // The same parser the service launcher reads the file with.
-    const serviceEnv = NodeUtil.parseEnv(current);
     const host = serviceEnv.T3CODE_HOST;
     if (host !== undefined && host !== "0.0.0.0") {
       yield* Console.warn(
@@ -228,7 +269,7 @@ const runUp = Effect.fn("cli.up")(function* (flags: {
     // An installed service reads service.env only when it starts.
     if (!result.changed) yield* service.restart;
 
-    const port = Number(serviceEnv.T3CODE_PORT ?? ServerConfig.DEFAULT_PORT);
+    const port = Number(configuredPort ?? ServerConfig.DEFAULT_PORT);
     const directUrl = `http://${address}:${port}`;
     yield* Console.log(
       [

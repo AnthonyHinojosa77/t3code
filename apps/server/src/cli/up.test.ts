@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 
-import { upsertServiceEnv } from "./up.ts";
+import { upPortCheck, upsertServiceEnv } from "./up.ts";
 
 it("rewrites only the service.env keys t3 up owns and keeps the user's lines", () => {
   const before = [
@@ -30,3 +30,18 @@ it("rewrites only the service.env keys t3 up owns and keeps the user's lines", (
     "T3CODE_TAILSCALE_SIGN_IN=1\n",
   );
 });
+
+it.each([
+  { configuredPort: undefined, free: true, ours: false, expected: "ok" },
+  { configuredPort: undefined, free: false, ours: true, expected: "ok" },
+  { configuredPort: undefined, free: false, ours: false, expected: "taken" },
+  { configuredPort: "3773", free: false, ours: false, expected: "ok" },
+  { configuredPort: "4000", free: true, ours: false, expected: "custom" },
+] as const)(
+  "port check with T3CODE_PORT=$configuredPort, free=$free, ours=$ours is $expected",
+  ({ configuredPort, free, ours, expected }) => {
+    expect(
+      upPortCheck({ configuredPort, defaultPortFree: free, defaultPortHeldByThisHome: ours }),
+    ).toBe(expected);
+  },
+);
