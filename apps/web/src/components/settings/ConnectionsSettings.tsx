@@ -133,6 +133,8 @@ import {
   SavedBackendListRow,
 } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { TailnetDevicesSettings } from "./TailnetDevicesSettings";
+import { TailscaleSignInRow } from "./TailscaleSignInRow";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -1117,6 +1119,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
                 {renderNetworkAccessRow()}
                 {renderEndpointRows()}
                 {renderTailscaleRow()}
+                <TailscaleSignInRow state={desktopServerExposureState} />
                 {renderWslRow()}
                 {canReadRelay || canManageRelay ? (
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
@@ -1188,6 +1191,10 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
                 )}
               </ScrollArea>
             </FoldedSettingsSection>
+          ) : null}
+          {primaryEnvironmentId !== null &&
+          primaryServerConfig?.environment.capabilities.tailnetSignIn === true ? (
+            <TailnetDevicesSettings environmentId={primaryEnvironmentId} />
           ) : null}
           <AlertDialog
             open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}

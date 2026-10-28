@@ -1,0 +1,116 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId, TailnetDevice } from "@t3tools/contracts";
+import { useEffect, useEffectEvent, useState } from "react";
+
+import { requestConfirmDialog } from "~/confirmDialog";
+import { tailnetEnvironment } from "~/state/tailnet";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { Button } from "../ui/button";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
+
+const failureMessage = (result: Parameters<typeof squashAtomCommandFailure>[0]) => {
+  const error = squashAtomCommandFailure(result);
+  return error instanceof Error ? error.message : String(error);
+};
+
+/**
+ * Devices that signed in to this host through Tailscale. Block ends a device's
+ * sessions here and refuses its sign-in until Unblock.
+ */
+export function TailnetDevicesSettings({
+  environmentId,
+}: {
+  readonly environmentId: EnvironmentId;
+}) {
+  const canManage = useAtomValue(tailnetEnvironment.listDevices.permissionAtom(environmentId));
+  const listDevices = useAtomCommand(tailnetEnvironment.listDevices, { reportFailure: false });
+  const blockDevice = useAtomCommand(tailnetEnvironment.blockDevice, { reportFailure: false });
+  const unblockDevice = useAtomCommand(tailnetEnvironment.unblockDevice, { reportFailure: false });
+  const [devices, setDevices] = useState<ReadonlyArray<TailnetDevice> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useEffectEvent(async () => {
+    const result = await listDevices({ environmentId, input: {} });
+    if (result._tag === "Success") {
+      setDevices(result.value.devices);
+      setError(null);
+    } else if (!isAtomCommandInterrupted(result)) {
+      setError(failureMessage(result));
+    }
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listing needs access:write, so it is a guarded command run when the section shows, not a query
+  useEffect(() => {
+    if (canManage) void load();
+  }, [canManage, environmentId]);
+
+  if (!canManage || (devices !== null && devices.length === 0 && error === null)) return null;
+
+  const toggle = async (device: TailnetDevice) => {
+    const name = device.label ?? device.stableNodeId;
+    if (device.blockedAt === null) {
+      const confirmed = await requestConfirmDialog(
+        `Block ${name}?\nIts sessions here end now, and it cannot sign in through Tailscale until you unblock it. A device that rejoins Tailscale gets a new ID, so block it again or remove it from your tailnet.`,
+        { variant: "destructive" },
+      );
+      if (confirmed !== true) return;
+    }
+    setBusyId(device.stableNodeId);
+    const input = { environmentId, input: { stableNodeId: device.stableNodeId } };
+    const result = await (device.blockedAt === null ? blockDevice(input) : unblockDevice(input));
+    setBusyId(null);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: device.blockedAt === null ? "Could not block the device" : "Could not unblock it",
+          description: failureMessage(result),
+        }),
+      );
+    }
+    await load();
+  };
+
+  return (
+    <SettingsSection id="tailscale-devices" title="Tailscale devices">
+      {error !== null ? (
+        <SettingsRow title="Could not load Tailscale devices" description={error} />
+      ) : devices === null ? (
+        <SettingsRow title="Loading Tailscale devices…" role="status" />
+      ) : (
+        devices.map((device) => (
+          <div key={device.stableNodeId} className={ITEM_ROW_CLASSNAME}>
+            <div className={ITEM_ROW_INNER_CLASSNAME}>
+              <div className="min-w-0 flex-1 space-y-1">
+                <h3 className="truncate text-sm font-medium text-foreground">
+                  {device.label ?? device.stableNodeId}
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {device.blockedAt !== null
+                    ? "Blocked"
+                    : device.activeSessionCount === 1
+                      ? "1 session"
+                      : `${device.activeSessionCount} sessions`}
+                </p>
+              </div>
+              <Button
+                size="xs"
+                variant={device.blockedAt === null ? "destructive-outline" : "outline"}
+                disabled={busyId === device.stableNodeId}
+                onClick={() => void toggle(device)}
+              >
+                {device.blockedAt === null ? "Block" : "Unblock"}
+              </Button>
+            </div>
+          </div>
+        ))
+      )}
+    </SettingsSection>
+  );
+}

@@ -62,6 +62,7 @@ export interface SshConnectionInput {
 export interface TailnetConnectionInput {
   /** `studio`, `studio.tailnet.ts.net`, `100.x.y.z`, or the `t3 up` QR's plain URL. */
   readonly address: string;
+  /** Adds the address as a route to this saved environment. */
   readonly expectedEnvironmentId?: EnvironmentId;
 }
 
@@ -243,6 +244,8 @@ export const prepareTailnetRegistration = Effect.fn(
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly expectedEnvironmentId?: EnvironmentId;
+  /** Only when the user picked the saved environment this address joins. */
+  readonly joinsRoutes?: boolean;
   readonly timeoutMs?: number;
 }) {
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
@@ -275,8 +278,10 @@ export const prepareTailnetRegistration = Effect.fn(
       network: "tailscale",
     }),
   };
-  const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  yield* registry.assertKnownAddress({ ...route, profile: Option.some(route.profile) });
+  if (input.joinsRoutes !== true) {
+    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+    yield* registry.assertKnownAddress({ ...route, profile: Option.some(route.profile) });
+  }
   const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
   if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
     return yield* compatibilityError;
@@ -288,11 +293,13 @@ export const prepareTailnetRegistration = Effect.fn(
 
 const saveTailnetRegistration = Effect.fn(
   "clientRuntime.connection.onboarding.saveTailnetRegistration",
-)(function* (registration: TailnetConnectionRegistration) {
+)(function* (registration: TailnetConnectionRegistration, joinsRoutes: boolean) {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   const environmentId = registration.target.environmentId;
-  // A found or typed address never joins the routes of a saved environment.
-  if (!(yield* registry.register(registration, { knownAddressOnly: true }))) return environmentId;
+  // A found or typed address joins a saved environment only when the user picked it.
+  if (!(yield* registry.register(registration, { knownAddressOnly: !joinsRoutes }))) {
+    return environmentId;
+  }
   yield* registry.setCompatibility(environmentId, null);
   yield* registry
     .setEnabled(environmentId, true)
@@ -308,14 +315,16 @@ const registerTailnetConnection = Effect.fn(
   if (httpBaseUrl === null || !supportsTailnetSignIn(presentation.metadata)) {
     return Option.none<EnvironmentId>();
   }
+  const joinsRoutes = input.expectedEnvironmentId !== undefined;
   const registration = yield* prepareTailnetRegistration({
     httpBaseUrl,
+    joinsRoutes,
     ...(input.expectedEnvironmentId === undefined
       ? {}
       : { expectedEnvironmentId: input.expectedEnvironmentId }),
   });
   if (Option.isNone(registration)) return Option.none<EnvironmentId>();
-  return Option.some(yield* saveTailnetRegistration(registration.value));
+  return Option.some(yield* saveTailnetRegistration(registration.value, joinsRoutes));
 });
 
 const addDiscoveredTailnetMachines = Effect.fn(
@@ -341,7 +350,7 @@ const addDiscoveredTailnetMachines = Effect.fn(
           Option.match({
             onNone: () => Effect.succeed([]),
             onSome: (registration) =>
-              saveTailnetRegistration(registration).pipe(
+              saveTailnetRegistration(registration, false).pipe(
                 Effect.as([
                   { environmentId: machine.environmentId, label: registration.target.label },
                 ]),
