@@ -73,6 +73,7 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import * as TailscaleHealth from "./environment/TailscaleHealth.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
@@ -125,6 +126,14 @@ import {
   WS_RPC_SERVER_OPTIONS,
   withLateEditorConfig,
 } from "./ws.ts";
+
+const TAILSCALE_RUNNING = {
+  state: "running",
+  checkedAt: "2026-10-28T00:00:00.000Z",
+  magicDnsName: null,
+  keyExpiry: null,
+  issues: [],
+} as const;
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
@@ -589,6 +598,7 @@ it.effect(
           resolveTargets: () => Effect.succeed([]),
         }),
         Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+        Layer.mock(TailscaleHealth.TailscaleHealth)({ check: Effect.succeed(TAILSCALE_RUNNING) }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           scratchRoot: Effect.succeedNone,
           namedProjectsRoot: process.cwd(),
@@ -765,6 +775,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         resolveTargets: () => Effect.succeed([]),
       }),
       Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+      Layer.mock(TailscaleHealth.TailscaleHealth)({ check: Effect.succeed(TAILSCALE_RUNNING) }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
         namedProjectsRoot: process.cwd(),

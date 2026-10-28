@@ -171,6 +171,23 @@ tailscale serve --https=443 off
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
 
+### Tailscale troubleshooting
+
+When a Tailscale route fails, the machine's row in **Settings → Environments** says
+why, using what the host last reported about its own Tailscale: signed out, off,
+waiting for approval, or a node key that has expired or expires soon. The desktop
+app also checks Tailscale on this device and whether the host is online on your
+tailnet. Online only means the host is connected to Tailscale, not that this
+device can reach it.
+
+On the host, run:
+
+```bash
+t3 tailscale status
+```
+
+It prints the same facts with a fix for each. Add `--json` for scripts.
+
 ### Hosted web app
 
 [app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly
