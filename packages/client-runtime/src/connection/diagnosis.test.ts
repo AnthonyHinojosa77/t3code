@@ -309,7 +309,8 @@ describe("offTailnetHint", () => {
     expect(offTailnetHint(connected)).toBe("Check that Tailscale is on for this device.");
     const offline = { ...connected, network: "offline" as const, routes: [TAILNET_FAILED] };
     expect(offTailnetHint(offline)).toBeNull();
-    expect(offTailnetHint({ ...offline, network: "online" })).not.toBeNull();
+    // A host that is off fails every route while this device is online.
+    expect(offTailnetHint({ ...offline, network: "online" })).toBeNull();
     expect(offTailnetHint({ ...connected, routes: [RELAY_ANSWERED] })).toBeNull();
   });
 

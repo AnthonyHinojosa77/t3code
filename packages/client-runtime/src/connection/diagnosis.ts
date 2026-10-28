@@ -91,14 +91,15 @@ export function routeOutcomeText(outcome: ConnectionRouteOutcome): string {
 
 /**
  * A hint, not a verdict: every Tailscale route failed while another route
- * answered or this device is online, so Tailscale may be off on this device.
+ * answered, so Tailscale may be off on this device. A host that is off fails
+ * every route, so it gets no hint.
  */
 export function offTailnetHint(state: SupervisorConnectionState): string | null {
   if (!everyTailnetRouteFailed(state)) return null;
   const otherAnswered = state.routes.some(
     (route) => route.kind !== "tailnet" && route.result === "answered",
   );
-  return otherAnswered || state.network === "online" ? OFF_TAILNET_HINT : null;
+  return otherAnswered ? OFF_TAILNET_HINT : null;
 }
 
 interface Located {
