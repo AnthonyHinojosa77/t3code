@@ -78,22 +78,23 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     kind: connectionRouteKind(route),
     address: connectionRouteAddress(route),
   });
+  const attemptScope = yield* Scope.Scope;
+  // The checks live in the attempt's scope, so a route that answers after
+  // another one connected still reports its outcome. Each check is bounded.
   const checks =
     routes.length === 1
       ? []
       : yield* Effect.forEach(routes, (route) =>
-          Effect.forkChild(
-            checkRoute(route).pipe(
-              Effect.tap((check) =>
-                check === "unchecked"
-                  ? Effect.void
-                  : reportRoute({ ...describe(route), result: check }),
-              ),
+          checkRoute(route).pipe(
+            Effect.tap((check) =>
+              check === "unchecked"
+                ? Effect.void
+                : reportRoute({ ...describe(route), result: check }),
             ),
+            Effect.forkIn(attemptScope),
           ),
         );
   const headStart = yield* Effect.forkChild(Effect.sleep(ROUTE_CHECK_HEAD_START_MS));
-  const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
   let blocked: ConnectionAttemptError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.

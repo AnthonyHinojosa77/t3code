@@ -1442,6 +1442,18 @@ describe("EnvironmentSupervisor routes", () => {
         "RelayConnectionTarget",
       );
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+
+      // The check outlives the connection it lost to, so the diagnosis sees the LAN outcome.
+      yield* TestClock.adjust("2 seconds");
+      expect(
+        (yield* SubscriptionRef.get(supervisor.state)).routes.map((route) => [
+          route.routeId,
+          route.result,
+        ]),
+      ).toEqual([
+        ["relay", "answered"],
+        [LAN_TARGET.connectionId, "silent"],
+      ]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -1839,6 +1851,41 @@ describe("EnvironmentSupervisor routes", () => {
       expect(yield* Ref.get(learned)).toEqual([
         `learned:${TARGET.environmentId}:http://192.168.1.10:3773`,
       ]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("drops the outcome of a route that learned routes replaced", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          Effect.succeed(route.target._tag === "BearerConnectionTarget" ? "answered" : "unchecked"),
+        prepare: (_attempt, target) =>
+          target._tag === "BearerConnectionTarget"
+            ? Effect.fail(transient("LAN socket refused."))
+            : Effect.succeed(preparedFor(target)),
+        initialConfig: () =>
+          Effect.succeed({ directEndpoints: [] } as Pick<
+            ServerConfig,
+            "directEndpoints"
+          > as ServerConfig),
+      });
+      const routesLearned = yield* Deferred.make<void>();
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+        learnRoutes: () =>
+          Deferred.succeed(routesLearned, undefined).pipe(Effect.as(Option.some(RELAY_ENTRY))),
+      }).pipe(Effect.provide(harness.dependencies));
+
+      const connected = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(connected.routes.map((route) => route.routeId)).toEqual([
+        LAN_TARGET.connectionId,
+        "relay",
+      ]);
+      yield* Deferred.await(routesLearned);
+      yield* TestClock.adjust("1 second");
+      expect(
+        (yield* SubscriptionRef.get(supervisor.state)).routes.map((route) => route.routeId),
+      ).toEqual(["relay"]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 });

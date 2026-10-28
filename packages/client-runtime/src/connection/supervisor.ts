@@ -286,6 +286,20 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   // fresh by each attempt instead of being fixed at creation.
   const currentEntry = yield* Ref.make(entry);
   const currentRoutes = Ref.get(currentEntry).pipe(Effect.map(connectionRoutes));
+  const currentRouteIds = currentRoutes.pipe(
+    Effect.map((routes) => new Set(routes.map((route) => connectionRouteId(route.target)))),
+  );
+  const updateRouteOutcomes = Effect.fnUntraced(function* (
+    update: (
+      current: ReadonlyMap<string, ConnectionRouteOutcome>,
+    ) => ReadonlyMap<string, ConnectionRouteOutcome>,
+  ) {
+    const outcomes = yield* Ref.updateAndGet(routeOutcomes, update);
+    yield* SubscriptionRef.update(state, (current) => ({
+      ...current,
+      routes: [...outcomes.values()],
+    }));
+  });
   const learnRoutesFrom = Effect.fnUntraced(function* (
     learn: NonNullable<EnvironmentSupervisorOptions["learnRoutes"]>,
     lease: ConnectionDriver.EnvironmentConnectionLease,
@@ -301,6 +315,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const updated = yield* learn({ activeRoute, reported });
     if (Option.isSome(updated)) {
       yield* Ref.set(currentEntry, updated.value);
+      // An outcome on a route that is gone would still sway the diagnosis.
+      const ids = yield* currentRouteIds;
+      yield* updateRouteOutcomes(
+        (current) => new Map([...current].filter(([routeId]) => ids.has(routeId))),
+      );
     }
   });
 
@@ -315,16 +334,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     yield* SubscriptionRef.set(state, { ...next, routes });
   });
 
+  // A route check can end after a disconnect cleared the outcomes, or after
+  // learned routes replaced the route it checked.
   const recordRoute = Effect.fn("EnvironmentSupervisor.recordRoute")(function* (
     outcome: ConnectionRouteOutcome,
   ) {
-    const outcomes = yield* Ref.updateAndGet(routeOutcomes, (current) =>
-      new Map(current).set(outcome.routeId, outcome),
-    );
-    yield* SubscriptionRef.update(state, (current) => ({
-      ...current,
-      routes: [...outcomes.values()],
-    }));
+    if (!(yield* Ref.get(intent)).desired) return;
+    if (!(yield* currentRouteIds).has(outcome.routeId)) return;
+    yield* updateRouteOutcomes((current) => new Map(current).set(outcome.routeId, outcome));
   });
 
   const signal = Effect.fn("EnvironmentSupervisor.signal")(function* (next: SupervisorSignal) {
