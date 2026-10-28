@@ -11,6 +11,7 @@ import * as Queue from "effect/Queue";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Tracer from "effect/Tracer";
@@ -280,6 +281,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     routes: [],
   });
   const routeOutcomes = yield* Ref.make<ReadonlyMap<string, ConnectionRouteOutcome>>(new Map());
+  // Held while outcomes are checked against the routes or intent and written,
+  // so a prune or a clear cannot land between the check and the write.
+  const routeOutcomesLock = yield* Semaphore.make(1);
   const session = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(Option.none());
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
   // Learned routes arrive while a session is live, so the route list is read
@@ -314,11 +318,15 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     if (activeRoute === undefined) return;
     const updated = yield* learn({ activeRoute, reported });
     if (Option.isSome(updated)) {
-      yield* Ref.set(currentEntry, updated.value);
-      // An outcome on a route that is gone would still sway the diagnosis.
-      const ids = yield* currentRouteIds;
-      yield* updateRouteOutcomes(
-        (current) => new Map([...current].filter(([routeId]) => ids.has(routeId))),
+      yield* routeOutcomesLock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* Ref.set(currentEntry, updated.value);
+          // An outcome on a route that is gone would still sway the diagnosis.
+          const ids = yield* currentRouteIds;
+          yield* updateRouteOutcomes(
+            (current) => new Map([...current].filter(([routeId]) => ids.has(routeId))),
+          );
+        }),
       );
     }
   });
@@ -332,7 +340,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const routes = next.desired ? [...(yield* Ref.get(routeOutcomes)).values()] : [];
     if (!next.desired) yield* Ref.set(routeOutcomes, new Map());
     yield* SubscriptionRef.set(state, { ...next, routes });
-  });
+  }, routeOutcomesLock.withPermits(1));
 
   // A route check can end after a disconnect cleared the outcomes, or after
   // learned routes replaced the route it checked.
@@ -342,7 +350,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     if (!(yield* Ref.get(intent)).desired) return;
     if (!(yield* currentRouteIds).has(outcome.routeId)) return;
     yield* updateRouteOutcomes((current) => new Map(current).set(outcome.routeId, outcome));
-  });
+  }, routeOutcomesLock.withPermits(1));
 
   const signal = Effect.fn("EnvironmentSupervisor.signal")(function* (next: SupervisorSignal) {
     yield* Queue.offer(signals, next);
