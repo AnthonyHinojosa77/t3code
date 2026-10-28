@@ -139,7 +139,7 @@ const resolveOwner = Effect.fn("cli.up.resolveOwner")(function* (
 });
 
 const checkTailscale = Effect.fn("cli.up.checkTailscale")(function* () {
-  const status = yield* readTailscaleStatus.pipe(
+  const status = yield* readTailscaleStatus("active").pipe(
     Effect.mapError(
       (cause) =>
         new TailscaleUpError({

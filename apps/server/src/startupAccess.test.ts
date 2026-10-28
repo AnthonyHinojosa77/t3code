@@ -13,8 +13,8 @@ import * as ServerConfig from "./config.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import {
   acceptsPrivateNetworkConnection,
-  acceptsTailnetConnection,
   issueHeadlessServeAccessInfo,
+  makeTailnetConnectionFilter,
   resolveHeadlessConnectionString,
 } from "./startupAccess.ts";
 
@@ -85,17 +85,56 @@ describe("acceptsPrivateNetworkConnection", () => {
   });
 });
 
-describe("acceptsTailnetConnection", () => {
+describe("makeTailnetConnectionFilter", () => {
+  const accepts = makeTailnetConnectionFilter({
+    now: () => 0,
+    readInterfaces: () => ({
+      lo0: [ipv4("127.0.0.1", true)],
+      // macOS names it utunN; Tailscale's IPv6 range identifies it.
+      utun4: [
+        ipv4("100.101.102.103"),
+        {
+          address: "fd7a:115c:a1e0::1",
+          netmask: "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+          family: "IPv6",
+          mac: "00:00:00:00:00:00",
+          internal: false,
+          cidr: "fd7a:115c:a1e0::1/128",
+          scopeid: 0,
+        },
+      ],
+      CloudflareWARP: [ipv4("100.96.0.2")],
+      en0: [ipv4("192.168.1.20")],
+    }),
+  });
+
   it.each([
     ["loopback", "127.0.0.1", "127.0.0.1", true],
     ["a tailnet peer", "100.101.102.103", "100.90.1.2", true],
     ["a mapped tailnet peer", "::ffff:100.101.102.103", "::ffff:100.90.1.2", true],
+    ["a peer on another VPN's 100.64/10 address", "100.96.0.2", "100.90.1.2", false],
     ["a LAN peer", "192.168.1.20", "192.168.1.31", false],
     ["a LAN peer on the tailnet address", "100.101.102.103", "192.168.1.31", false],
     ["loopback reaching a LAN address", "192.168.1.20", "127.0.0.1", false],
     ["an unknown address", undefined, "100.90.1.2", false],
   ] as const)("serves %s: %s", (_name, localAddress, remoteAddress, expected) => {
-    expect(acceptsTailnetConnection({ localAddress, remoteAddress })).toBe(expected);
+    expect(accepts({ localAddress, remoteAddress })).toBe(expected);
+  });
+
+  it("picks up Tailscale coming up after the server started", () => {
+    let now = 0;
+    const interfaces: Record<string, Array<NodeOS.NetworkInterfaceInfo>> = {
+      en0: [ipv4("192.168.1.20")],
+    };
+    const acceptsLater = makeTailnetConnectionFilter({
+      now: () => now,
+      readInterfaces: () => interfaces,
+    });
+    const peer = { localAddress: "100.101.102.103", remoteAddress: "100.90.1.2" };
+    interfaces.tailscale0 = [ipv4("100.101.102.103")];
+    expect(acceptsLater(peer)).toBe(false);
+    now = 5_000;
+    expect(acceptsLater(peer)).toBe(true);
   });
 });
 

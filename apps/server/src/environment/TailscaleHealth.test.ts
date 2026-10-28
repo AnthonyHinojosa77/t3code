@@ -4,10 +4,15 @@ import {
   TailscaleCommandTimeoutError,
   type TailscaleStatus,
 } from "@t3tools/tailscale";
+import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
-import { describe, expect, it } from "vite-plus/test";
+import { describe } from "vite-plus/test";
 
+import * as TailscaleHost from "../tailscale/TailscaleHost.ts";
+import * as TailscaleHealth from "./TailscaleHealth.ts";
 import { classifyTailscaleHealth, type TailscaleStatusRead } from "./TailscaleHealth.ts";
 
 const NOW = Date.parse("2026-10-28T12:00:00.000Z");
@@ -139,4 +144,28 @@ describe("classifyTailscaleHealth", () => {
     expect(result.state).toBe(state);
     expect(result.issues.map((issue) => issue.cause)).toEqual(causes);
   });
+});
+
+describe("TailscaleHealth", () => {
+  it.effect("reports nothing and runs no CLI while this machine shows no sign of Tailscale", () =>
+    Effect.gen(function* () {
+      const health = yield* TailscaleHealth.TailscaleHealth;
+      expect(yield* health.check).toBeUndefined();
+    }).pipe(
+      Effect.provide(
+        TailscaleHealth.layer.pipe(
+          Layer.provide(
+            Layer.succeed(
+              TailscaleHost.TailscaleHost,
+              TailscaleHost.TailscaleHost.of({
+                inUse: Effect.succeed(false),
+                status: Effect.die("must not read Tailscale"),
+                whois: () => Effect.die("must not read Tailscale"),
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 });

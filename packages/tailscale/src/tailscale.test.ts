@@ -60,7 +60,7 @@ function assertCarriesNoSecret(error: object, secret: string): void {
 
   walk(error, "error");
 }
-const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
+const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20","100.64.0.1abc","100.064.0.1"]}}`;
 
 // 9007199254740993 is 2^53 + 1, which a JS number rounds to 2^53.
 const fullStatusJson = `{
@@ -351,7 +351,10 @@ describe("tailscale", () => {
     );
 
     return Effect.gen(function* () {
-      const statusError = yield* readTailscaleStatus.pipe(Effect.flip, Effect.provide(layer));
+      const statusError = yield* readTailscaleStatus("passive").pipe(
+        Effect.flip,
+        Effect.provide(layer),
+      );
       assert.instanceOf(statusError, TailscaleCommandSpawnError);
       assert.equal(statusError.subcommand, "status");
       assert.strictEqual(statusError.cause, defect);
@@ -364,7 +367,7 @@ describe("tailscale", () => {
       assert.equal(serveError.subcommand, "serve");
       assert.strictEqual(serveError.cause, defect);
 
-      const degraded = yield* readTailscaleStatus.pipe(
+      const degraded = yield* readTailscaleStatus("passive").pipe(
         Effect.orElseSucceed(() => null),
         Effect.provide(layer),
       );
@@ -379,7 +382,7 @@ describe("tailscale", () => {
     }));
 
     return Effect.gen(function* () {
-      const error = yield* readTailscaleStatus.pipe(Effect.flip, Effect.provide(layer));
+      const error = yield* readTailscaleStatus("passive").pipe(Effect.flip, Effect.provide(layer));
 
       assert.instanceOf(error, TailscaleCommandExitError);
       assert.equal(error.executable, "tailscale");
@@ -416,7 +419,7 @@ describe("tailscale", () => {
     );
 
     return Effect.gen(function* () {
-      yield* readTailscaleStatus.pipe(Effect.provide(layer));
+      yield* readTailscaleStatus("passive").pipe(Effect.provide(layer));
       yield* readTailscaleSshEnabled.pipe(Effect.provide(layer));
       assert.deepEqual(killGraces, [500, 500]);
     });
@@ -474,7 +477,11 @@ describe("tailscale", () => {
 
   it.effect("finds the macOS CLI outside PATH and keeps paths out of errors", () => {
     const appBundle = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
-    const attempt = (platform: NodeJS.Platform, installedAt: string | null) => {
+    const attempt = (
+      platform: NodeJS.Platform,
+      installedAt: string | null,
+      use: "passive" | "active" = "active",
+    ) => {
       const tried: Array<{ readonly command: string; readonly beCli: string | undefined }> = [];
       const layer = Layer.merge(
         Layer.succeed(
@@ -499,7 +506,7 @@ describe("tailscale", () => {
         ),
         Layer.succeed(HostProcess.Platform, platform),
       );
-      return readTailscaleStatus.pipe(
+      return readTailscaleStatus(use).pipe(
         Effect.result,
         Effect.map((result) => ({ result, tried })),
         Effect.provide(layer),
@@ -515,6 +522,13 @@ describe("tailscale", () => {
         { command: "/opt/homebrew/bin/tailscale", beCli: undefined },
         { command: appBundle, beCli: "1" },
       ]);
+      // A passive read never spawns the app bundle, which can raise a macOS data-access prompt.
+      const passive = yield* attempt("darwin", appBundle, "passive");
+      assert.isTrue(Result.isFailure(passive.result));
+      assert.notInclude(
+        passive.tried.map((entry) => entry.command),
+        appBundle,
+      );
 
       const missing = yield* attempt("darwin", null);
       assert.isTrue(Result.isFailure(missing.result));

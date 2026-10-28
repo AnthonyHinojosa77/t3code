@@ -1,9 +1,14 @@
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
-import { isPrivateNetworkHost, isSharedAddressSpaceHost } from "@t3tools/shared/hostClassification";
+import {
+  isPrivateNetworkHost,
+  isSharedAddressSpaceHost,
+  isTailnetHost,
+} from "@t3tools/shared/hostClassification";
 import { QrCode } from "@t3tools/shared/qrCode";
 import { buildPairingAppLink } from "@t3tools/shared/remote";
+import { isTailscaleIpv4Address } from "@t3tools/tailscale";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -72,6 +77,10 @@ export const acceptsPrivateNetworkConnection = (socket: {
     (address) => address !== undefined && isPrivateNetworkAddress(address),
   );
 
+const isIpv4Family = (family: string | number): boolean => family === "IPv4" || family === 4;
+
+const isIpv6Family = (family: string | number): boolean => family === "IPv6" || family === 6;
+
 /** The IPv4 address of a plain or IPv4-mapped IPv6 address, or null. */
 const plainIpv4 = (address: string): string | null => {
   const ipv4 = address.replace(/^::ffff:/i, "");
@@ -80,24 +89,71 @@ const plainIpv4 = (address: string): string | null => {
 
 const isTailnetIpv4Address = (address: string): boolean => {
   const ipv4 = plainIpv4(address);
-  return ipv4 !== null && isSharedAddressSpaceHost(ipv4);
+  return ipv4 !== null && isTailscaleIpv4Address(ipv4);
 };
 
 const isLoopbackAddress = (address: string): boolean =>
   address === "::1" || plainIpv4(address)?.startsWith("127.") === true;
 
+// macOS utun names need Tailscale's IPv6 range to identify them; WARP shares its IPv4 range.
+export const isTailscaleInterface = (
+  name: string,
+  entries: ReadonlyArray<{ readonly family: string | number; readonly address: string }>,
+): boolean =>
+  /^tailscale/i.test(name) ||
+  entries.some((entry) => isIpv6Family(entry.family) && isTailnetHost(entry.address));
+
+const tailscaleInterfaceIpv4Addresses = (interfaces: NetworkInterfacesMap): ReadonlySet<string> =>
+  new Set(
+    Object.entries(interfaces).flatMap(([name, entries = []]) =>
+      isTailscaleInterface(name, entries)
+        ? entries
+            .filter((entry) => isIpv4Family(entry.family) && isTailscaleIpv4Address(entry.address))
+            .map((entry) => entry.address)
+        : [],
+    ),
+  );
+
 /**
  * A Tailscale-only listener serves loopback and tailnet peers and nothing
- * else, so LAN devices cannot reach it even on a wildcard bind.
+ * else, so LAN devices cannot reach it even on a wildcard bind. The local end
+ * must be one of `tailscaleAddresses`, since other VPNs share 100.64/10.
  */
-export const acceptsTailnetConnection = (socket: {
-  readonly localAddress?: string | undefined;
-  readonly remoteAddress?: string | undefined;
-}): boolean => {
+export const acceptsTailnetConnection = (
+  socket: {
+    readonly localAddress?: string | undefined;
+    readonly remoteAddress?: string | undefined;
+  },
+  tailscaleAddresses: ReadonlySet<string>,
+): boolean => {
   const { localAddress, remoteAddress } = socket;
   if (localAddress === undefined || remoteAddress === undefined) return false;
   if (isLoopbackAddress(remoteAddress)) return isLoopbackAddress(localAddress);
-  return isTailnetIpv4Address(remoteAddress) && isTailnetIpv4Address(localAddress);
+  const local = plainIpv4(localAddress);
+  return isTailnetIpv4Address(remoteAddress) && local !== null && tailscaleAddresses.has(local);
+};
+
+const TAILSCALE_ADDRESS_REFRESH_MS = 5_000;
+
+/**
+ * {@link acceptsTailnetConnection} against this machine's Tailscale interface
+ * addresses. A refused connection reads them again at most every few seconds,
+ * so Tailscale coming up after the server starts is picked up.
+ */
+export const makeTailnetConnectionFilter = (options: {
+  readonly now: () => number;
+  readonly readInterfaces?: () => NetworkInterfacesMap;
+}) => {
+  const readInterfaces = options.readInterfaces ?? NodeOS.networkInterfaces;
+  let addresses = tailscaleInterfaceIpv4Addresses(readInterfaces());
+  let readAt = options.now();
+  return (socket: Parameters<typeof acceptsTailnetConnection>[0]): boolean => {
+    if (acceptsTailnetConnection(socket, addresses)) return true;
+    if (options.now() - readAt < TAILSCALE_ADDRESS_REFRESH_MS) return false;
+    addresses = tailscaleInterfaceIpv4Addresses(readInterfaces());
+    readAt = options.now();
+    return acceptsTailnetConnection(socket, addresses);
+  };
 };
 
 export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): string =>
@@ -107,10 +163,6 @@ export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): stri
 
 const normalizeHost = (host: string): string =>
   host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-
-const isIpv4Family = (family: string | number): boolean => family === "IPv4" || family === 4;
-
-const isIpv6Family = (family: string | number): boolean => family === "IPv6" || family === 6;
 
 const resolveHeadlessConnectionHost = (
   host: string | undefined,

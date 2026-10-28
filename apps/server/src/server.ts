@@ -14,6 +14,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -202,7 +203,7 @@ import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import {
   acceptsPrivateNetworkConnection,
-  acceptsTailnetConnection,
+  makeTailnetConnectionFilter,
   loopbackUrlHostForAddress,
 } from "./startupAccess.ts";
 import * as TailscaleServe from "./tailscaleServe.ts";
@@ -312,13 +313,14 @@ const layerRelayClient = Layer.unwrap(
 const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const clock = yield* Clock.Clock;
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
           guardHttpResponseWriteErrors(NodeHttp.createServer()),
         );
         const acceptsConnection = config.tailscaleOnly
-          ? acceptsTailnetConnection
+          ? makeTailnetConnectionFilter({ now: () => clock.currentTimeMillisUnsafe() })
           : config.privateNetworkOnly
             ? acceptsPrivateNetworkConnection
             : undefined;

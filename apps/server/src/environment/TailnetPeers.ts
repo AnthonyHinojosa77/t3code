@@ -3,6 +3,7 @@ import { readT3EnvironmentId } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -68,12 +69,20 @@ const make = Effect.gen(function* () {
     return found.flatMap(Option.toArray);
   }).pipe(
     Effect.provideService(HttpClient.HttpClient, httpClient),
-    // Tailscale being down is an empty tailnet, not a failure for the phone.
-    Effect.orElseSucceed((): ReadonlyArray<TailnetPeerEnvironment> => []),
     Effect.withSpan("TailnetPeers.discover"),
   );
+  // A failed read is not kept, so the next request asks Tailscale again.
+  const cached = yield* Effect.cachedWithTTL(discover, (exit) =>
+    Exit.isSuccess(exit) ? RESULT_TTL : Duration.zero,
+  );
 
-  return TailnetPeers.of({ list: yield* Effect.cachedWithTTL(discover, RESULT_TTL) });
+  return TailnetPeers.of({
+    list: host.inUse.pipe(
+      Effect.flatMap((inUse) => (inUse ? cached : Effect.succeed([]))),
+      // Tailscale being down is an empty tailnet, not a failure for the phone.
+      Effect.orElseSucceed((): ReadonlyArray<TailnetPeerEnvironment> => []),
+    ),
+  });
 });
 
 export const layer = Layer.effect(TailnetPeers, make);

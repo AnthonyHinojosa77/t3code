@@ -14,14 +14,13 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
-import { isTailnetHost } from "@t3tools/shared/hostClassification";
-
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 import {
   formatHostForUrl,
   isLoopbackHost,
   isPrivateNetworkAddress,
+  isTailscaleInterface,
   isWildcardHost,
   VIRTUAL_INTERFACE,
 } from "../startupAccess.ts";
@@ -41,14 +40,6 @@ export class DirectEndpoints extends Context.Service<
 // Credentials travel over HTTP; public IPs leak them and hostnames can resolve differently per client.
 const isAdvertisableAddress = (address: string): boolean =>
   NodeNet.isIPv4(address) && !address.startsWith("127.") && isPrivateNetworkAddress(address);
-
-// macOS utun names need Tailscale's IPv6 range to identify them; WARP shares its IPv4 range.
-const isTailscaleInterface = (
-  name: string,
-  entries: ReadonlyArray<NodeOS.NetworkInterfaceInfo>,
-): boolean =>
-  /^tailscale/i.test(name) ||
-  entries.some((entry) => entry.family === "IPv6" && isTailnetHost(entry.address));
 
 export function resolveBoundEndpoints(input: {
   readonly host: string | undefined;
@@ -137,7 +128,7 @@ export const make = Effect.gen(function* () {
     ];
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
     if (config.tailscaleServeEnabled) {
-      const servedUrl = yield* readTailscaleStatus.pipe(
+      const servedUrl = yield* readTailscaleStatus("active").pipe(
         Effect.map((status) => status.magicDnsName),
         Effect.flatMap((magicDnsName) => {
           if (magicDnsName === null) return Effect.succeed(null);

@@ -45,6 +45,15 @@ export class TailnetSignInRefusedError extends Schema.TaggedError<TailnetSignInR
   }
 }
 
+export class TailnetDeviceBlockLookupError extends Schema.TaggedError<TailnetDeviceBlockLookupError>()(
+  "TailnetDeviceBlockLookupError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Failed to check whether the device is blocked.";
+  }
+}
+
 export class TailnetSignIn extends Context.Service<
   TailnetSignIn,
   {
@@ -57,6 +66,7 @@ export class TailnetSignIn extends Context.Service<
     ) => Effect.Effect<
       AuthTailnetSignInResult,
       | TailnetSignInRefusedError
+      | TailnetDeviceBlockLookupError
       | EnvironmentAuth.ServerAuthInvalidCredentialError
       | EnvironmentAuth.ServerAuthInternalError
     >;
@@ -130,7 +140,10 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const refuse = (reason: TailnetSignInRefusedReason, cause?: unknown) =>
-    Effect.logWarning("Refused Tailscale sign-in.").pipe(
+    // Every server that is not set up for sign-in, and every browser, sees these routinely.
+    (reason === "disabled" || reason === "browser_request" ? Effect.logDebug : Effect.logWarning)(
+      "Refused Tailscale sign-in.",
+    ).pipe(
       Effect.annotateLogs({ reason }),
       Effect.andThen(
         Effect.fail(
@@ -199,11 +212,7 @@ const make = Effect.gen(function* () {
 
       const blocked = yield* blocks
         .isBlocked({ stableNodeId: node.stableNodeId })
-        .pipe(
-          Effect.mapError(
-            (cause) => new EnvironmentAuth.ServerAuthPairingLinkCreationError({ cause }),
-          ),
-        );
+        .pipe(Effect.mapError((cause) => new TailnetDeviceBlockLookupError({ cause })));
       if (blocked) return yield* refuse("blocked");
 
       const issued = yield* environmentAuth.createPairingLink({

@@ -63,6 +63,7 @@ const layerTailscaleHost = (tailnet: Tailnet) =>
   Layer.succeed(
     TailscaleHost.TailscaleHost,
     TailscaleHost.TailscaleHost.of({
+      inUse: Effect.succeed(true),
       status: Effect.suspend(() => parseTailscaleStatus(tailscaleJson(tailnet.status))),
       whois: () =>
         Effect.suspend(() =>

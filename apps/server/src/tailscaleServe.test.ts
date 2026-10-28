@@ -38,6 +38,8 @@ const makeFakeTailscale = (options: FakeOptions) => {
     releases: 0,
     root: options.heldBy ?? null,
   };
+  // Completes when the daemon takes the mapping, before the CLI exits.
+  const mappingApplied = Deferred.makeUnsafe<void>();
   const serveStatus = () =>
     state.root === null
       ? "null\n"
@@ -63,6 +65,7 @@ const makeFakeTailscale = (options: FakeOptions) => {
         return undefined;
       }
       state.root = args.at(-1) ?? null;
+      Deferred.doneUnsafe(mappingApplied, Effect.void);
       return { code: 0, ...(options.ackDelay === undefined ? {} : { ackDelay: options.ackDelay }) };
     }
     if (command === `serve --https=${SERVE_PORT} --set-path=/ off`) {
@@ -96,7 +99,7 @@ const makeFakeTailscale = (options: FakeOptions) => {
       }),
     );
   });
-  return { state, spawner };
+  return { state, spawner, mappingApplied };
 };
 
 const startTailscaleServe = Effect.fn(function* (options: FakeOptions = {}) {
@@ -123,7 +126,7 @@ const startTailscaleServe = Effect.fn(function* (options: FakeOptions = {}) {
     ),
     scope,
   );
-  return { state: fake.state, scope, settled };
+  return { state: fake.state, mappingApplied: fake.mappingApplied, scope, settled };
 });
 
 describe("TailscaleServe", () => {
@@ -132,10 +135,9 @@ describe("TailscaleServe", () => {
   it.effect("configures Serve once a later attempt succeeds, without a restart", () =>
     Effect.gen(function* () {
       const { state, settled } = yield* startTailscaleServe({ refusedServeAttempts: 1 });
-      yield* Effect.yieldNow;
-      assert.equal(state.root, null);
       // Headless startup prints its pairing URL after the first attempt, not after every retry.
-      assert.isTrue(yield* Deferred.isDone(settled));
+      yield* Deferred.await(settled);
+      assert.equal(state.root, null);
 
       yield* TestClock.adjust("1 hour");
 
@@ -181,10 +183,11 @@ describe("TailscaleServe", () => {
 
   it.effect("removes the Serve root on shutdown while the CLI has yet to acknowledge it", () =>
     Effect.gen(function* () {
-      const { state, scope } = yield* startTailscaleServe({ ackDelay: "2 seconds" });
-      yield* Effect.yieldNow;
+      const { state, mappingApplied, scope } = yield* startTailscaleServe({
+        ackDelay: "2 seconds",
+      });
+      yield* Deferred.await(mappingApplied);
       assert.equal(state.serveAttempts, 1);
-      assert.equal(state.root, LOCAL_TARGET, "the daemon never received the mapping");
 
       const shutdown = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
       yield* TestClock.adjust("2 seconds");

@@ -554,6 +554,8 @@ export const layerTailnet = HttpApiBuilder.group(
                 ),
               ),
             ),
+          TailnetDeviceBlockLookupError: (error) =>
+            failEnvironmentInternal("internal_error", error),
         }),
         Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
           failEnvironmentInternal("pairing_credential_issuance_failed", error),

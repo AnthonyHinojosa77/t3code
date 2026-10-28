@@ -11,6 +11,7 @@ import {
   type TailscaleCommandError,
   type TailscaleStatus,
   type TailscaleStatusParseError,
+  tailscaleStateOfReadError,
 } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -57,27 +58,17 @@ function readErrorFacts(
   error: TailscaleCommandError | TailscaleStatusParseError,
   platform: NodeJS.Platform,
 ): ServerTailscaleIssue & { readonly cause: Exclude<TailscaleState, "running"> } {
-  switch (error._tag) {
-    case "TailscaleCommandSpawnError":
-      return { cause: "not_installed", fix: stateFix("not_installed", platform) };
-    case "TailscaleCommandTimeoutError":
-      return { cause: "unreadable", fix: "`tailscale status` did not answer. Restart Tailscale." };
-    case "TailscaleCommandExitError":
-      // The CLI exits non-zero mostly when it cannot reach tailscaled.
-      switch (error.stderrDiagnostic) {
-        case "not-logged-in":
-          return { cause: "needs_login", fix: stateFix("needs_login", platform) };
-        case "permission-denied":
-          return {
-            cause: "unreadable",
-            fix: "Let the user that runs T3 Code run `tailscale status`.",
-          };
-        default:
-          return { cause: "not_running", fix: stateFix("not_running", platform) };
-      }
-    default:
-      return { cause: "unreadable", fix: stateFix("unreadable", platform) };
+  const cause = tailscaleStateOfReadError(error);
+  if (error._tag === "TailscaleCommandTimeoutError") {
+    return { cause, fix: "`tailscale status` did not answer. Restart Tailscale." };
   }
+  if (
+    error._tag === "TailscaleCommandExitError" &&
+    error.stderrDiagnostic === "permission-denied"
+  ) {
+    return { cause, fix: "Let the user that runs T3 Code run `tailscale status`." };
+  }
+  return { cause, fix: stateFix(cause, platform) };
 }
 
 /** Turns one `tailscale status` read into the facts the CLI prints and clients show. */
@@ -170,19 +161,23 @@ const readTailscaleHealthWith = Effect.fn("TailscaleHealth.read")(function* <R>(
 });
 
 /** Reads and classifies now, for the CLI. The server goes through the cache in {@link TailscaleHealth}. */
-export const readTailscaleHealth = readTailscaleHealthWith(readTailscaleStatus);
+export const readTailscaleHealth = readTailscaleHealthWith(readTailscaleStatus("active"));
 
 export class TailscaleHealth extends Context.Service<
   TailscaleHealth,
   {
-    /** At most 30 s old. Concurrent callers share one read. */
-    readonly check: Effect.Effect<ServerTailscaleStatus>;
+    /**
+     * At most 30 s old. Concurrent callers share one read. Undefined, with no
+     * read, while this machine shows no sign of using Tailscale.
+     */
+    readonly check: Effect.Effect<ServerTailscaleStatus | undefined>;
   }
 >()("t3/environment/TailscaleHealth") {}
 
 const make = Effect.gen(function* () {
   const host = yield* TailscaleHost.TailscaleHost;
-  const check = yield* Effect.cachedWithTTL(readTailscaleHealthWith(host.status), CACHE_TTL);
+  const read = yield* Effect.cachedWithTTL(readTailscaleHealthWith(host.status), CACHE_TTL);
+  const check = host.inUse.pipe(Effect.flatMap((inUse) => (inUse ? read : Effect.undefined)));
   return TailscaleHealth.of({ check });
 });
 

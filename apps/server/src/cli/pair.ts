@@ -359,7 +359,7 @@ const awaitEnvironmentDescriptor = Effect.fn(function* (baseUrl: string) {
 const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase")(
   function* (input: { readonly target: DiscoveredPairTarget; readonly servePort: number }) {
     const notes: Array<string> = [];
-    const status = yield* readTailscaleStatus.pipe(
+    const status = yield* readTailscaleStatus("active").pipe(
       Effect.mapError((cause) => new TailscaleUnavailableError({ cause })),
     );
     if (status.magicDnsName === null) {

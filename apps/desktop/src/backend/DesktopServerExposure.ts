@@ -9,11 +9,12 @@ import {
   type DesktopServerExposureMode,
   type DesktopServerExposureState,
 } from "@t3tools/contracts";
-import { isTailscaleIpv4Address, readTailscaleStatus } from "@t3tools/tailscale";
+import { isTailscaleIpv4Address, readT3EnvironmentId } from "@t3tools/tailscale";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -25,9 +26,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
+import * as DesktopTailscaleStatus from "./DesktopTailscaleStatus.ts";
 import { resolveTailscaleAdvertisedEndpoints } from "./tailscaleEndpointProvider.ts";
-
-const TAILSCALE_STATUS_CACHE_TTL = Duration.seconds(60);
 
 const DESKTOP_LOOPBACK_HOST = "127.0.0.1";
 const DESKTOP_LAN_BIND_HOST = "0.0.0.0";
@@ -440,25 +440,6 @@ function resolveRuntimeState(input: {
   };
 }
 
-export const tailscaleIpv4AddressKey = (
-  networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
-): string =>
-  [
-    ...new Set(
-      Object.values(networkInterfaces)
-        .flatMap((addresses) => addresses ?? [])
-        .filter(
-          (address) =>
-            !address.internal &&
-            address.family === "IPv4" &&
-            isTailscaleIpv4Address(address.address),
-        )
-        .map((address) => address.address),
-    ),
-  ]
-    .toSorted()
-    .join(",");
-
 const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
   previous.port !== next.port ||
   previous.bindHost !== next.bindHost ||
@@ -471,22 +452,24 @@ export const make = Effect.gen(function* () {
   const networkInterfaces = yield* DesktopNetworkInterfaces.DesktopNetworkInterfaces;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const tailscaleStatus = yield* DesktopTailscaleStatus.DesktopTailscaleStatus;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const stateRef = yield* Ref.make(initialRuntimeState());
   // Serialize read-persist-write changes so stale runtime state cannot overwrite another update.
   const changePermit = yield* Semaphore.make(1);
 
-  // Key status by interface addresses so network changes bypass stale DNS and
-  // identity. Cache unchanged addresses to avoid repeated macOS TCC prompts.
-  const tailscaleStatusCache = yield* Cache.make({
-    capacity: 1,
-    timeToLive: TAILSCALE_STATUS_CACHE_TTL,
-    lookup: (_addresses: string) =>
-      readTailscaleStatus.pipe(
-        Effect.orElseSucceed(() => null),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+  // A backend keeps its environment ID for its run. Nothing answering yet is not kept.
+  const localEnvironmentIds = yield* Cache.makeWith(
+    (localHttpUrl: string) =>
+      readT3EnvironmentId({ baseUrl: localHttpUrl }).pipe(
+        Effect.provideService(HttpClient.HttpClient, httpClient),
       ),
-  });
+    {
+      capacity: 1,
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) && Option.isSome(exit.value) ? Duration.infinity : Duration.zero,
+    },
+  );
 
   const readNetworkInterfaces = networkInterfaces.read;
 
@@ -632,11 +615,9 @@ export const make = Effect.gen(function* () {
       serveEnabled: state.tailscaleServeEnabled,
       servePort: state.tailscaleServePort,
       localHttpUrl: state.localHttpUrl,
+      localEnvironmentId: Cache.get(localEnvironmentIds, state.localHttpUrl),
       networkInterfaces: currentNetworkInterfaces,
-      readStatus: Cache.get(
-        tailscaleStatusCache,
-        tailscaleIpv4AddressKey(currentNetworkInterfaces),
-      ),
+      readStatus: tailscaleStatus.status,
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
       Effect.provideService(HttpClient.HttpClient, httpClient),

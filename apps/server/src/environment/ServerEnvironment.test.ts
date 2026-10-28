@@ -26,6 +26,7 @@ const layerTailscaleHost = (statusJson: string) =>
   Layer.succeed(
     TailscaleHost.TailscaleHost,
     TailscaleHost.TailscaleHost.of({
+      inUse: Effect.succeed(true),
       status: parseTailscaleStatus(statusJson),
       whois: () => Effect.die("whois is not read by the descriptor"),
     }),
@@ -319,6 +320,13 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       status: { Self: { ID: "nBox", Tags: ["tag:server"], TailscaleIPs: ["100.88.1.2"] } },
       owner: "7",
       expected: true,
+    },
+    {
+      name: "Tailscale is older than sign-in supports",
+      signIn: true,
+      status: { Version: "1.78.1" },
+      owner: undefined,
+      expected: undefined,
     },
   ])("reports Tailscale sign-in when $name", ({ signIn, status, owner, expected }) =>
     Effect.gen(function* () {

@@ -1,4 +1,7 @@
+import * as NodeOS from "node:os";
+
 import {
+  isTailscaleIpv4Address,
   readTailscaleStatus,
   readTailscaleWhois,
   type TailscaleCommandError,
@@ -16,6 +19,8 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+
+import * as ServerConfig from "../config.ts";
 
 const STATUS_TTL = Duration.seconds(5);
 // Short, so a renewal reads a node that was tagged or removed seconds ago.
@@ -44,6 +49,11 @@ export type TailscaleWhoisError =
 export class TailscaleHost extends Context.Service<
   TailscaleHost,
   {
+    /**
+     * A Tailscale feature is on, or an interface holds a 100.64/10 address.
+     * Reads nobody asked for, such as health facts, skip the CLI otherwise.
+     */
+    readonly inUse: Effect.Effect<boolean>;
     /** `tailscale status`, single-flight and kept for a few seconds. */
     readonly status: Effect.Effect<TailscaleStatus, TailscaleStatusError>;
     /** Who owns a tailnet address. Single-flight per address, kept for a few seconds at most. */
@@ -79,9 +89,21 @@ export const tailnetOwnerUserId = (
   status.selfTags.length === 0 ? status.selfUserId : (configuredOwnerUserId ?? null);
 
 const make = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const featureOn =
+    config.tailscaleServeEnabled ||
+    config.tailscaleSignInEnabled === true ||
+    config.tailscaleOnly === true;
+  const inUse = featureOn
+    ? Effect.succeed(true)
+    : Effect.sync(() =>
+        Object.values(NodeOS.networkInterfaces()).some((entries) =>
+          entries?.some((entry) => !entry.internal && isTailscaleIpv4Address(entry.address)),
+        ),
+      );
   const status = yield* Effect.cachedWithTTL(
-    readTailscaleStatus.pipe(
+    readTailscaleStatus(featureOn ? "active" : "passive").pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     ),
     STATUS_TTL,
@@ -117,7 +139,7 @@ const make = Effect.gen(function* () {
 
   const whois: TailscaleHost["Service"]["whois"] = (address) => Cache.get(whoisCache, address);
 
-  return TailscaleHost.of({ status, whois });
+  return TailscaleHost.of({ inUse, status, whois });
 });
 
 export const layer = Layer.effect(TailscaleHost, make);

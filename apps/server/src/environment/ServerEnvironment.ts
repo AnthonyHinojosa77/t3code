@@ -282,6 +282,7 @@ export const make = Effect.gen(function* () {
           (status) =>
             status.backendState === "Running" &&
             status.userspaceNetworking !== true &&
+            TailscaleHost.isSupportedTailscaleVersion(status.version) &&
             TailscaleHost.tailnetOwnerUserId(status, serverConfig.tailscaleOwnerUserId) !== null,
         ),
         Effect.orElseSucceed(() => false),

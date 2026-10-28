@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { parseTailscaleStatus } from "@t3tools/tailscale";
+import { parseTailscaleStatus, TailscaleStatusParseError } from "@t3tools/tailscale";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,12 +32,16 @@ const STATUS = JSON.stringify({
   },
 });
 
-const layerTest = (probed: Array<string>) =>
+const layerTest = (
+  probed: Array<string>,
+  status: TailscaleHost.TailscaleHost["Service"]["status"] = parseTailscaleStatus(STATUS),
+) =>
   Layer.mergeAll(
     Layer.succeed(
       TailscaleHost.TailscaleHost,
       TailscaleHost.TailscaleHost.of({
-        status: parseTailscaleStatus(STATUS),
+        inUse: Effect.succeed(true),
+        status,
         whois: () => Effect.die("whois is not used for discovery"),
       }),
     ),
@@ -82,5 +86,20 @@ it.layer(NodeServices.layer)("TailnetPeers", (it) => {
       yield* peers.list;
       expect(probed).toHaveLength(3);
     }).pipe(Effect.provide(TailnetPeers.layer.pipe(Layer.provide(layerTest(probed)))));
+  });
+
+  it.effect("asks Tailscale again after a failed read instead of keeping an empty tailnet", () => {
+    let reads = 0;
+    const status = Effect.suspend(() => {
+      reads += 1;
+      return reads === 1
+        ? Effect.fail(new TailscaleStatusParseError({ cause: "tailscaled restarting" }))
+        : parseTailscaleStatus(STATUS);
+    });
+    return Effect.gen(function* () {
+      const peers = yield* TailnetPeers.TailnetPeers;
+      expect(yield* peers.list).toEqual([]);
+      expect((yield* peers.list).map((peer) => peer.name)).toEqual(["studio", "ci"]);
+    }).pipe(Effect.provide(TailnetPeers.layer.pipe(Layer.provide(layerTest([], status)))));
   });
 });

@@ -1,6 +1,7 @@
 import * as NodeNet from "node:net";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isSharedAddressSpaceHost } from "@t3tools/shared/hostClassification";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -32,11 +33,15 @@ const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
  * CLI only inside the app bundle. Tailscale documents aliasing the bundle
  * binary as `tailscale`.
  */
-const DARWIN_FALLBACK_EXECUTABLES = [
-  "/usr/local/bin/tailscale",
-  "/opt/homebrew/bin/tailscale",
-  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-];
+const DARWIN_CLI_PATHS = ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale"];
+const DARWIN_APP_BUNDLE_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+
+/**
+ * Passive reads run without the user turning on a Tailscale feature or
+ * command, so they never spawn the macOS app bundle: that can raise a
+ * data-access prompt.
+ */
+export type TailscaleCliUse = "passive" | "active";
 
 const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "tailscale.exe" =>
   platform === "win32" ? "tailscale.exe" : "tailscale";
@@ -236,7 +241,6 @@ const TailscaleStatusJson = Schema.Struct({
 });
 
 export interface TailscalePeer {
-  /** The node's StableID. */
   readonly stableNodeId: string;
   readonly hostName: string | null;
   readonly magicDnsName: string | null;
@@ -310,23 +314,9 @@ const nonEmptyOrNull = (value: string | undefined): string | null =>
 const timeOrNull = (value: string | undefined): string | null =>
   value === undefined || value.startsWith("0001-01-01") ? null : value;
 
-export function isTailscaleIpv4Address(address: string): boolean {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const [first, second, third, fourth] = parts.map((part) => Number.parseInt(part, 10));
-  if (
-    first === undefined ||
-    second === undefined ||
-    third === undefined ||
-    fourth === undefined ||
-    [first, second, third, fourth].some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
-    return false;
-  }
-  return first === 100 && second >= 64 && second <= 127;
-}
+/** A dotted IPv4 address in 100.64/10, where Tailscale assigns from. Other VPNs share the range. */
+export const isTailscaleIpv4Address = (address: string): boolean =>
+  NodeNet.isIPv4(address) && isSharedAddressSpaceHost(address);
 
 const tailnetIpv4AddressesOf = (addresses: ReadonlyArray<string> | undefined) =>
   (addresses ?? []).filter(isTailscaleIpv4Address);
@@ -396,6 +386,7 @@ const runTailscale = Effect.fn("tailscale.runTailscale")(function* (
   subcommand: TailscaleSubcommand,
   args: readonly string[],
   timeout: Duration.Duration,
+  use: TailscaleCliUse,
 ): Effect.fn.Return<string, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const hostPlatform = yield* HostProcess.Platform;
@@ -410,10 +401,16 @@ const runTailscale = Effect.fn("tailscale.runTailscale")(function* (
       ChildProcess.make(path, [...args], {
         forceKillAfter: TAILSCALE_KILL_GRACE,
         // tailscaled reads TS_BE_CLI to act as the CLI (cmd/tailscaled/tailscaled.go).
-        ...(path.startsWith("/Applications/") ? { env: { TS_BE_CLI: "1" }, extendEnv: true } : {}),
+        ...(path === DARWIN_APP_BUNDLE_CLI ? { env: { TS_BE_CLI: "1" }, extendEnv: true } : {}),
       }),
     );
-  const spawnFirstInstalled = (hostPlatform === "darwin" ? DARWIN_FALLBACK_EXECUTABLES : []).reduce(
+  const fallbacks =
+    hostPlatform !== "darwin"
+      ? []
+      : use === "active"
+        ? [...DARWIN_CLI_PATHS, DARWIN_APP_BUNDLE_CLI]
+        : DARWIN_CLI_PATHS;
+  const spawnFirstInstalled = fallbacks.reduce(
     (attempt, path) =>
       attempt.pipe(
         Effect.catchIf(
@@ -470,15 +467,33 @@ const runTailscale = Effect.fn("tailscale.runTailscale")(function* (
   );
 });
 
-const readTailscaleStatusOutput = runTailscale(
-  "status",
-  ["status", "--json"],
-  TAILSCALE_STATUS_TIMEOUT,
-);
+const readTailscaleStatusOutput = (use: TailscaleCliUse) =>
+  runTailscale("status", ["status", "--json"], TAILSCALE_STATUS_TIMEOUT, use);
 
-export const readTailscaleStatus = readTailscaleStatusOutput.pipe(
-  Effect.flatMap(parseTailscaleStatus),
-);
+export const readTailscaleStatus = (use: TailscaleCliUse) =>
+  readTailscaleStatusOutput(use).pipe(Effect.flatMap(parseTailscaleStatus));
+
+/** What a failed `tailscale status` read says about Tailscale on this machine. */
+export const tailscaleStateOfReadError = (
+  error: TailscaleCommandError | TailscaleStatusParseError,
+): "not_installed" | "not_running" | "needs_login" | "unreadable" => {
+  switch (error._tag) {
+    case "TailscaleCommandSpawnError":
+      return "not_installed";
+    case "TailscaleCommandExitError":
+      // The CLI exits non-zero mostly when it cannot reach tailscaled.
+      switch (error.stderrDiagnostic) {
+        case "not-logged-in":
+          return "needs_login";
+        case "permission-denied":
+          return "unreadable";
+        default:
+          return "not_running";
+      }
+    default:
+      return "unreadable";
+  }
+};
 
 const TailscaleExitNodeJson = Schema.Struct({
   ExitNodeStatus: Schema.optional(Schema.Struct({ Online: Schema.optional(Schema.Unknown) })),
@@ -527,7 +542,7 @@ export const parseTailscaleExitNode = (
     }),
   );
 
-export const readTailscaleExitNode = readTailscaleStatusOutput.pipe(
+export const readTailscaleExitNode = readTailscaleStatusOutput("passive").pipe(
   Effect.flatMap(parseTailscaleExitNode),
 );
 
@@ -554,6 +569,7 @@ export const readTailscaleSshEnabled = runTailscale(
   "debug",
   ["debug", "prefs"],
   TAILSCALE_STATUS_TIMEOUT,
+  "passive",
 ).pipe(Effect.flatMap(parseTailscaleSshEnabled));
 
 // The node fields that decide trust are strict: missing required ones, or a
@@ -617,7 +633,7 @@ export const parseTailscaleWhois = (
     })),
   );
 
-/** Asks the local daemon which node and user own a tailnet address. */
+/** Asks the local daemon which node and user own a tailnet address. Only sign-in and `t3 up` ask. */
 export const readTailscaleWhois = Effect.fn("tailscale.readTailscaleWhois")(function* (
   address: string,
 ) {
@@ -626,6 +642,7 @@ export const readTailscaleWhois = Effect.fn("tailscale.readTailscaleWhois")(func
     "whois",
     ["whois", "--json", "--", address],
     TAILSCALE_STATUS_TIMEOUT,
+    "active",
   );
   return yield* parseTailscaleWhois(stdout);
 });
@@ -657,7 +674,7 @@ export const ensureTailscaleServe = (
 ): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> => {
   const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
   const args = ["serve", "--bg", `--https=${servePort}`, serveProxyTarget(input)];
-  return runTailscale("serve", args, TAILSCALE_SERVE_TIMEOUT).pipe(Effect.asVoid);
+  return runTailscale("serve", args, TAILSCALE_SERVE_TIMEOUT, "active").pipe(Effect.asVoid);
 };
 
 export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
@@ -666,7 +683,12 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
   } = {},
 ): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
   const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
-  yield* runTailscale("serve", ["serve", `--https=${servePort}`, "off"], TAILSCALE_SERVE_TIMEOUT);
+  yield* runTailscale(
+    "serve",
+    ["serve", `--https=${servePort}`, "off"],
+    TAILSCALE_SERVE_TIMEOUT,
+    "active",
+  );
 });
 
 const TailscaleServeConfigFields = {
@@ -712,6 +734,7 @@ const readTailscaleServeConfig = runTailscale(
   "serve",
   ["serve", "status", "--json"],
   TAILSCALE_STATUS_TIMEOUT,
+  "active",
 ).pipe(
   Effect.flatMap((stdout) =>
     decodeTailscaleServeConfigJson(stdout).pipe(
@@ -827,6 +850,7 @@ export const releaseTailscaleServe = Effect.fn("tailscale.releaseTailscaleServe"
     "serve",
     ["serve", `--https=${servePort}`, "--set-path=/", "off"],
     TAILSCALE_SERVE_TIMEOUT,
+    "active",
   );
   return true;
 });
