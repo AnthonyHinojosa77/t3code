@@ -9,14 +9,19 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
-/** The desktop switch that lets this user's own Tailscale devices connect with no code. */
+/**
+ * The desktop switch that lets this user's own Tailscale devices connect with no
+ * code. The WSL backend never gets sign-in, so WSL only mode turns it off.
+ */
 export function TailscaleSignInRow({
   state,
+  wslOnly,
 }: {
   readonly state: DesktopServerExposureState | null;
+  readonly wslOnly: boolean;
 }) {
   const [isUpdating, setIsUpdating] = useState(false);
-  const enabled = state?.tailscaleSignInEnabled === true;
+  const enabled = state?.tailscaleSignInEnabled === true && !wslOnly;
   const port = state?.port;
   const movedPort = enabled && port !== undefined && port !== TAILNET_SIGN_IN_PORT;
 
@@ -53,9 +58,11 @@ export function TailscaleSignInRow({
     <SettingsRow
       title={searchableSetting("tailscale-sign-in").title}
       description={
-        enabled
-          ? "Your own Tailscale devices connect with no pairing code."
-          : "Let your own Tailscale devices connect with no pairing code."
+        wslOnly
+          ? "Not available while WSL only is on. Turn off WSL only to use it."
+          : enabled
+            ? "Your own Tailscale devices connect with no pairing code."
+            : "Let your own Tailscale devices connect with no pairing code."
       }
       status={
         movedPort ? (
@@ -68,7 +75,7 @@ export function TailscaleSignInRow({
       control={
         <Switch
           checked={enabled}
-          disabled={isUpdating || state === null}
+          disabled={isUpdating || state === null || wslOnly}
           onCheckedChange={(checked) => void handleChange(checked)}
           aria-label="Enable Tailscale sign-in"
         />

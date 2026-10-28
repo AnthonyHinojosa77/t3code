@@ -1119,7 +1119,10 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
                 {renderNetworkAccessRow()}
                 {renderEndpointRows()}
                 {renderTailscaleRow()}
-                <TailscaleSignInRow state={desktopServerExposureState} />
+                <TailscaleSignInRow
+                  state={desktopServerExposureState}
+                  wslOnly={desktopWslState?.enabled === true && desktopWslState.wslOnly}
+                />
                 {renderWslRow()}
                 {canReadRelay || canManageRelay ? (
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
