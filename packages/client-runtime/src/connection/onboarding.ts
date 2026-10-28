@@ -213,6 +213,9 @@ const isBearerCredential = Schema.is(BearerConnectionCredential);
 const isTailnetCredential = Schema.is(TailnetConnectionCredential);
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 
+// URL drops a default port, so `http://host:80/` and `http://host/` are one address.
+const sameAddress = (a: string, b: string) => normalizeHttpBaseUrl(a) === normalizeHttpBaseUrl(b);
+
 const updateBearerConnection = Effect.fn(
   "clientRuntime.connection.onboarding.updateBearerConnection",
 )(function* (input: BearerConnectionUpdateInput) {
@@ -234,8 +237,11 @@ const updateBearerConnection = Effect.fn(
   const signInBaseUrl = Option.exists(credential, isTailnetCredential)
     ? tailnetSignInBaseUrl(input.httpBaseUrl)
     : null;
+  const savedHttpBaseUrl = entry === undefined ? null : routeHttpBaseUrl(entry);
   const signedIn =
-    signInBaseUrl === null || entry === undefined || signInBaseUrl === routeHttpBaseUrl(entry)
+    signInBaseUrl === null ||
+    savedHttpBaseUrl === null ||
+    sameAddress(signInBaseUrl, savedHttpBaseUrl)
       ? Option.none<TailnetConnectionRegistration>()
       : yield* prepareTailnetRegistration({
           httpBaseUrl: signInBaseUrl,
@@ -453,9 +459,9 @@ export const prepareBearerConnectionUpdate = Effect.fn(
       credential,
     });
   }
-  const moved = httpBaseUrl !== saved.httpBaseUrl;
+  const moved = !sameAddress(httpBaseUrl, saved.httpBaseUrl);
   // A Tailscale session works only at the address it signed in at.
-  if (moved && httpBaseUrl !== credential.signInBaseUrl) {
+  if (moved && !sameAddress(httpBaseUrl, credential.signInBaseUrl)) {
     return yield* new ConnectionBlockedError({
       reason: "configuration",
       detail: "A Tailscale machine's address must be its Tailscale name or 100.x address.",
@@ -467,7 +473,8 @@ export const prepareBearerConnectionUpdate = Effect.fn(
       connectionId,
       environmentId: options.input.environmentId,
       label,
-      httpBaseUrl,
+      // The saved form keeps an explicit `:80`, which a bare Tailscale address would read as 3773.
+      httpBaseUrl: moved ? credential.signInBaseUrl : saved.httpBaseUrl,
       wsBaseUrl: moved ? deriveWsBaseUrl(httpBaseUrl) : saved.wsBaseUrl,
       ...(moved
         ? { authorization: "tailnet" as const, network: "tailscale" as const }

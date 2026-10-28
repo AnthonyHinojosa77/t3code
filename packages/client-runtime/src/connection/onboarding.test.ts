@@ -737,6 +737,23 @@ describe("connection onboarding", () => {
         httpBaseUrl: "http://100.88.1.3:3773/",
         authorization: "tailnet",
       });
+
+      // A bare Tailscale address means port 3773, so a typed `:80` must stay in the saved URL.
+      yield* onboarding.updateBearer({
+        environmentId: PAIRED_ENVIRONMENT_ID,
+        label: "Studio",
+        httpBaseUrl: "100.88.1.4:80",
+      });
+      yield* onboarding.updateBearer({
+        environmentId: PAIRED_ENVIRONMENT_ID,
+        label: "Studio 80",
+        httpBaseUrl: "http://100.88.1.4:80/",
+      });
+      expect(yield* savedProfile).toMatchObject({
+        label: "Studio 80",
+        httpBaseUrl: "http://100.88.1.4:80/",
+        authorization: "tailnet",
+      });
     }).pipe(
       Effect.provide(
         layerPairingOnboarding({ tailnetSignIn: true, savedCredential: TAILNET_SESSION }),
