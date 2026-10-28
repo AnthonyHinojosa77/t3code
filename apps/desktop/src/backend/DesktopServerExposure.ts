@@ -409,7 +409,7 @@ function resolveRuntimeState(input: {
   };
 }
 
-const tailscaleIpv4AddressKey = (
+export const tailscaleIpv4AddressKey = (
   networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
 ): string =>
   [

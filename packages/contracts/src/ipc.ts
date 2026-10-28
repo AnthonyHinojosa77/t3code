@@ -11,6 +11,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import { TailscaleState } from "./server.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -392,6 +393,27 @@ export const DesktopDiscoveredSshHostSchema = Schema.Struct({
   port: Schema.NullOr(Schema.Number),
   source: DesktopSshHostSourceSchema,
 });
+
+/** `online` means connected to Tailscale's control plane, not reachable from here. */
+export const DesktopTailscalePeerSchema = Schema.Struct({
+  tailnetAddresses: Schema.Array(Schema.String),
+  magicDnsName: Schema.NullOr(Schema.String),
+  online: Schema.Boolean,
+  lastSeen: Schema.NullOr(Schema.String),
+  active: Schema.Boolean,
+  curAddr: Schema.NullOr(Schema.String),
+  relay: Schema.NullOr(Schema.String),
+  peerRelay: Schema.NullOr(Schema.String),
+});
+export type DesktopTailscalePeer = typeof DesktopTailscalePeerSchema.Type;
+
+/** This device's own Tailscale, read on demand for connection diagnosis. */
+export const DesktopTailscaleStatusSchema = Schema.Struct({
+  state: TailscaleState,
+  checkedAt: Schema.String,
+  peers: Schema.Array(DesktopTailscalePeerSchema),
+});
+export type DesktopTailscaleStatus = typeof DesktopTailscaleStatusSchema.Type;
 
 export interface DesktopSshEnvironmentBootstrap {
   target: DesktopSshEnvironmentTarget;
@@ -1070,6 +1092,7 @@ export interface DesktopBridge {
     readonly port?: number;
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  getTailscaleStatus: () => Promise<DesktopTailscaleStatus>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;

@@ -20,7 +20,11 @@ import { cn } from "../../lib/cn";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { serverEnvironment } from "../../state/server";
 import { environmentPresentations } from "../../state/presentation";
-import { ConnectionDiagnosisDetails, useConnectionDiagnosis } from "./ConnectionDiagnosisDetails";
+import {
+  ConnectionDiagnosisDetails,
+  HostTailscaleNotice,
+  useConnectionDiagnosis,
+} from "./ConnectionDiagnosisDetails";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
 import { environmentStatusText } from "./environmentStatusText";
@@ -153,6 +157,9 @@ export function ConnectionEnvironmentRow(props: {
                 />
               ) : null}
             </Text>
+          ) : null}
+          {!diagnosis && enabled && presentation !== null ? (
+            <HostTailscaleNotice presentation={presentation} />
           ) : null}
           {freeze ? (
             <Text

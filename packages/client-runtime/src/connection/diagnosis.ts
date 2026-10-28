@@ -1,6 +1,13 @@
 import {
+  type DesktopTailscalePeer,
+  type DesktopTailscaleStatus,
+  formatRoughDuration,
+  type ServerTailscaleIssueCause,
+  type ServerTailscaleStatus,
   t3ConnectTroubleshootingUrl,
   type T3ConnectTroubleshootingSection,
+  tailscaleIssueHeadline,
+  type TailscaleState,
 } from "@t3tools/contracts";
 import type { RelayEnvironmentStatusResponse } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
@@ -32,8 +39,8 @@ export interface ConnectionDiagnosis {
   readonly moreInfoUrl: string | null;
 }
 
-/** This device's own Tailscale state, when the platform can read it. */
-export type LocalTailscaleState = "running" | "stopped" | "needs-login" | "not-installed";
+/** This device's own Tailscale, when the platform can read it (desktop). */
+export type LocalTailscaleStatus = Pick<DesktopTailscaleStatus, "state" | "peers">;
 
 export interface ConnectionDiagnosisInput {
   readonly hostLabel: string;
@@ -51,7 +58,10 @@ export interface ConnectionDiagnosisInput {
   readonly clientVersion?: string | undefined;
   readonly serverVersion?: string | null | undefined;
   /** Turns the Tailscale hint into a verdict on platforms that can read it. */
-  readonly localTailscale?: LocalTailscaleState | null;
+  readonly localTailscale?: LocalTailscaleStatus | null;
+  /** The host's own Tailscale, as it last reported in its server config. */
+  readonly hostTailscale?: ServerTailscaleStatus | null | undefined;
+  readonly now?: number;
 }
 
 const TAILSCALE_TROUBLESHOOTING_URL =
@@ -67,6 +77,11 @@ function failedTailnetRoutes(
   return tailnet.every(routeDidNotAnswer) ? tailnet : [];
 }
 
+/** True when every Tailscale route failed, so this device's own Tailscale is worth reading. */
+export function everyTailnetRouteFailed(state: SupervisorConnectionState): boolean {
+  return failedTailnetRoutes(state.routes).length > 0;
+}
+
 /** The latest outcome on one route, for a route list. */
 export function routeOutcomeText(outcome: ConnectionRouteOutcome): string {
   if (outcome.result === "answered") return "Answered";
@@ -78,7 +93,7 @@ export function routeOutcomeText(outcome: ConnectionRouteOutcome): string {
  * answered or this device is online, so Tailscale may be off on this device.
  */
 export function offTailnetHint(state: SupervisorConnectionState): string | null {
-  if (failedTailnetRoutes(state.routes).length === 0) return null;
+  if (!everyTailnetRouteFailed(state)) return null;
   const otherAnswered = state.routes.some(
     (route) => route.kind !== "tailnet" && route.result === "answered",
   );
@@ -321,35 +336,155 @@ function hopLabel(hop: ConnectionHop, host: string): string {
   }
 }
 
-function tailnetHeadline(input: ConnectionDiagnosisInput): string {
-  const host = input.hostLabel;
-  switch (input.localTailscale) {
-    case "stopped":
-      return "Tailscale is off on this device";
-    case "needs-login":
-      return "Tailscale on this device needs sign-in";
-    case "not-installed":
-      return "Tailscale is not installed on this device";
-    default:
-      return input.relayStatus?.status === "online"
-        ? `${host} is online on T3 Connect, but its Tailscale address did not answer`
-        : `${host} did not answer over Tailscale`;
-  }
+/** Local states that rule out every Tailscale route from this device. */
+function localTailscaleDown(
+  state: TailscaleState | undefined,
+): state is Exclude<TailscaleState, "running" | "unreadable"> {
+  return state !== undefined && state !== "running" && state !== "unreadable";
 }
 
-function tailnetSteps(input: ConnectionDiagnosisInput): string[] {
+/** Host issues that stop its Tailscale address from answering. */
+const HOST_TAILSCALE_DOWN: ReadonlySet<ServerTailscaleIssueCause> = new Set([
+  "not_running",
+  "needs_login",
+  "needs_machine_approval",
+  "stopped",
+  "key_expired",
+]);
+
+/** Also shown on a host's row; the rest only matter while setting up the host. */
+const HOST_TAILSCALE_NOTICE: ReadonlySet<ServerTailscaleIssueCause> = new Set([
+  ...HOST_TAILSCALE_DOWN,
+  "key_expiring",
+  "health_warning",
+]);
+
+/** " (as of 2h ago)" for facts a minute old or more. */
+function asOf(checkedAt: string, now: number): string {
+  const age = now - Date.parse(checkedAt);
+  return age >= 60_000 ? ` (as of ${formatRoughDuration(age)} ago)` : "";
+}
+
+/** The host's Tailscale problem as one headline and its fix, from the facts it last reported. */
+export function hostTailscaleNotice(
+  hostLabel: string,
+  status: ServerTailscaleStatus | null | undefined,
+  now: number,
+  causes: ReadonlySet<ServerTailscaleIssueCause> = HOST_TAILSCALE_NOTICE,
+): { readonly headline: string; readonly fix: string } | null {
+  const issue = status?.issues.find((candidate) => causes.has(candidate.cause));
+  if (status == null || issue === undefined) return null;
+  return {
+    headline: `${tailscaleIssueHeadline(hostLabel, issue, status.keyExpiry, now)}${asOf(status.checkedAt, now)}`,
+    fix: `On ${hostLabel}: ${issue.fix}`,
+  };
+}
+
+/**
+ * The path to a peer, only while it is active. `relay` is the peer's home DERP
+ * region even on a direct path, so it means DERP only without the others.
+ */
+function tailscalePeerPath(peer: DesktopTailscalePeer): string | null {
+  if (!peer.active) return null;
+  if (peer.curAddr !== null) return "direct";
+  if (peer.peerRelay !== null) return "peer relay";
+  return peer.relay !== null ? `DERP (${peer.relay})` : null;
+}
+
+// Peers list only IPv4 tailnet addresses, so an IPv6 route cannot be matched.
+function routeHostname(address: string | null): string | null {
+  if (address === null || !URL.canParse(address)) return null;
+  const hostname = new URL(address).hostname.toLowerCase();
+  return hostname.startsWith("[") ? null : hostname;
+}
+
+/**
+ * The peer behind any of the failed routes, by tailnet address or MagicDNS
+ * name. Undefined when no route has an address a peer could match.
+ */
+function routePeer(
+  peers: ReadonlyArray<DesktopTailscalePeer>,
+  routes: ReadonlyArray<ConnectionRouteOutcome>,
+): DesktopTailscalePeer | null | undefined {
+  const hostnames = new Set(routes.flatMap((route) => routeHostname(route.address) ?? []));
+  if (hostnames.size === 0) return undefined;
+  return (
+    peers.find((peer) => {
+      const dnsName = peer.magicDnsName?.toLowerCase();
+      return (
+        peer.tailnetAddresses.some((address) => hostnames.has(address)) ||
+        (dnsName !== undefined &&
+          (hostnames.has(dnsName) || hostnames.has(dnsName.split(".")[0] ?? "")))
+      );
+    }) ?? null
+  );
+}
+
+function lastSeen(peer: DesktopTailscalePeer, now: number): string | null {
+  return peer.lastSeen === null
+    ? null
+    : `last seen ${formatRoughDuration(now - Date.parse(peer.lastSeen))} ago`;
+}
+
+function peerFact(peer: DesktopTailscalePeer | null | undefined, now: number): string | null {
+  if (peer === undefined) return null;
+  if (peer === null) return "not on this device's tailnet";
+  const detail = peer.online ? tailscalePeerPath(peer) : lastSeen(peer, now);
+  return [peer.online ? "online" : "offline", detail].filter(Boolean).join(", ");
+}
+
+interface TailnetVerdict {
+  readonly headline: string;
+  readonly steps: ReadonlyArray<string>;
+}
+
+/** Why every Tailscale route failed: this device, then the host's report, then the peer list. */
+function tailnetVerdict(
+  input: ConnectionDiagnosisInput,
+  routes: ReadonlyArray<ConnectionRouteOutcome>,
+  now: number,
+): TailnetVerdict {
   const host = input.hostLabel;
+  const local = input.localTailscale;
   const awake = `Make sure ${host} is awake and T3 Code is running on it.`;
-  switch (input.localTailscale) {
-    case "stopped":
-    case "needs-login":
-    case "not-installed":
-      return ["Turn on Tailscale on this device and sign in. T3 Code reconnects on its own."];
-    case "running":
-      return [`Check that Tailscale is on and signed in on ${host}.`, awake];
-    default:
-      return [`Check that Tailscale is on and signed in on this device and on ${host}.`, awake];
+  if (localTailscaleDown(local?.state)) {
+    return {
+      headline: tailscaleIssueHeadline("this device", { cause: local.state, fix: "" }, null, now),
+      steps: ["Turn on Tailscale on this device and sign in. T3 Code reconnects on its own."],
+    };
   }
+  const hostNotice = hostTailscaleNotice(host, input.hostTailscale, now, HOST_TAILSCALE_DOWN);
+  if (hostNotice !== null) return { headline: hostNotice.headline, steps: [hostNotice.fix] };
+
+  const generic =
+    input.relayStatus?.status === "online"
+      ? `${host} is online on T3 Connect, but its Tailscale address did not answer`
+      : `${host} did not answer over Tailscale`;
+  const peer = local?.state === "running" ? routePeer(local.peers, routes) : undefined;
+  if (peer === undefined) {
+    return {
+      headline: generic,
+      steps: [`Check that Tailscale is on and signed in on this device and on ${host}.`, awake],
+    };
+  }
+  if (peer === null) {
+    return {
+      headline: `${host} is not on this device's tailnet`,
+      steps: [`Sign in to the same tailnet on this device and on ${host}.`, awake],
+    };
+  }
+  // Online means connected to Tailscale's control plane, not reachable from here.
+  if (!peer.online) {
+    const seen = lastSeen(peer, now);
+    return {
+      headline: `${host} is offline on your tailnet${seen === null ? "" : ` (${seen})`}`,
+      steps: [`Make sure ${host} is awake and Tailscale is on.`],
+    };
+  }
+  return {
+    headline: generic,
+    steps: [awake, `Check that no firewall on ${host} blocks its port.`],
+  };
 }
 
 /**
@@ -371,7 +506,9 @@ export function presentConnectionDiagnosis(
       ? failedTailnetRoutes(input.state.routes)
       : [];
   const tailnet = tailnetRoutes.length > 0;
-  const tailscaleOff = tailnet && (input.localTailscale ?? "running") !== "running";
+  const local = input.localTailscale;
+  const tailscaleOff = tailnet && localTailscaleDown(local?.state);
+  const now = input.now ?? DateTime.toEpochMillis(DateTime.nowUnsafe());
   const relayPath =
     located.hop === "relay" ||
     located.hop === "tunnel" ||
@@ -402,17 +539,27 @@ export function presentConnectionDiagnosis(
   );
   add("Route", relayPath ? "T3 Connect" : "Direct");
   for (const route of tailnetRoutes) add("Failed route", `Tailscale ${route.address ?? ""}`.trim());
-  if (tailnet) add("Tailscale on this device", input.localTailscale);
+  if (tailnet) {
+    add("Tailscale on this device", local?.state);
+    if (local?.state === "running") {
+      add("Tailscale peer", peerFact(routePeer(local.peers, tailnetRoutes), now));
+    }
+    const hostTailscale = input.hostTailscale;
+    if (hostTailscale != null) {
+      add("Tailscale on host", `${hostTailscale.state}${asOf(hostTailscale.checkedAt, now)}`);
+    }
+  }
   if (input.via !== "relay") add("T3 Connect", input.relayStatus?.status);
   add("App version", input.clientVersion);
   add("Host version", input.serverVersion);
   add("Error", failure?.detail);
   add("Trace ID", failure?.traceId);
 
+  const verdict = tailnet ? tailnetVerdict(input, tailnetRoutes, now) : null;
   return {
-    headline: tailnet ? tailnetHeadline(input) : headline(host, located, failure),
+    headline: verdict?.headline ?? headline(host, located, failure),
     hops,
-    steps: tailnet ? tailnetSteps(input) : steps(host, located, failure),
+    steps: verdict?.steps ?? steps(host, located, failure),
     facts,
     moreInfoUrl: tailnet
       ? TAILSCALE_TROUBLESHOOTING_URL

@@ -4,6 +4,7 @@ import {
   type ConnectionDiagnosis,
   connectionDiagnosisText,
   connectionRoutes,
+  environmentTailscaleNotice,
   hasRelayRoute,
   presentConnectionDiagnosis,
   type EnvironmentPresentation,
@@ -18,6 +19,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { environmentCatalog } from "../../connection/catalog";
 import { cn } from "../../lib/cn";
+import { useNowMinuteMs } from "../../lib/clock";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 
@@ -50,8 +52,34 @@ export function useConnectionDiagnosis(
       : null,
     clientVersion: Constants.expoConfig?.version,
     serverVersion: presentation.serverConfig?.environment.serverVersion,
+    hostTailscale: presentation.serverConfig?.tailscale,
   });
   return { diagnosis, state };
+}
+
+/** The host's last reported Tailscale problem, for its row while no connection has failed. */
+export function HostTailscaleNotice(props: { readonly presentation: EnvironmentPresentation }) {
+  return props.presentation.serverConfig?.tailscale?.issues.length ? (
+    <HostTailscaleNoticeLines presentation={props.presentation} />
+  ) : null;
+}
+
+// Ticks once a minute, and only for hosts with a Tailscale issue, so ages and expiry stay current.
+function HostTailscaleNoticeLines(props: { readonly presentation: EnvironmentPresentation }) {
+  const now = useNowMinuteMs();
+  const notice = environmentTailscaleNotice({
+    hostLabel: props.presentation.entry.target.label,
+    entry: props.presentation.entry,
+    serverConfig: props.presentation.serverConfig,
+    now,
+  });
+  if (notice === null) return null;
+  return (
+    <>
+      <Text className="text-xs text-warning-foreground">{notice.headline}</Text>
+      <Text className="text-xs text-foreground-muted">{notice.fix}</Text>
+    </>
+  );
 }
 
 export function ConnectionDiagnosisDetails(props: {

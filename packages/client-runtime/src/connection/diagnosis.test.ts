@@ -1,10 +1,17 @@
+import type { DesktopTailscalePeer, ServerTailscaleStatus } from "@t3tools/contracts";
 import {
   RelayEnvironmentEndpointUnavailableError,
   type RelayProtectedError,
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 
-import { offTailnetHint, presentConnectionDiagnosis } from "./diagnosis.ts";
+import {
+  type ConnectionDiagnosisInput,
+  hostTailscaleNotice,
+  offTailnetHint,
+  presentConnectionDiagnosis,
+} from "./diagnosis.ts";
 import { mapManagedRelayError, mapRemoteEnvironmentError } from "./errors.ts";
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -181,7 +188,7 @@ describe("presentConnectionDiagnosis", () => {
       hostLabel: "Mac mini",
       state,
       via: "direct",
-      localTailscale: "stopped",
+      localTailscale: { state: "stopped", peers: [] },
     });
     expect(tailscaleOff?.headline).toBe("Tailscale is off on this device");
     expect(tailscaleOff?.hops.map((hop) => `${hop.hop}:${hop.result}`)).toEqual([
@@ -193,6 +200,84 @@ describe("presentConnectionDiagnosis", () => {
     const answered = { ...TAILNET_FAILED, result: "answered" } as const;
     expect(diagnose({ ...state, routes: [answered] }, "direct")?.headline).toBe(
       "T3 Code on Mac mini did not answer",
+    );
+  });
+});
+
+describe("Tailscale facts in the diagnosis", () => {
+  const NOW = Date.UTC(2026, 9, 28, 12);
+  const HOUR = 60 * 60 * 1000;
+  const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+  const state = { ...backoff(tailnetTimeout), routes: [TAILNET_FAILED] };
+  const peer: DesktopTailscalePeer = {
+    tailnetAddresses: ["100.64.0.1"],
+    magicDnsName: "mac-mini.tail1234.ts.net",
+    online: true,
+    lastSeen: null,
+    active: true,
+    curAddr: null,
+    relay: "fra",
+    peerRelay: null,
+  };
+  const withFacts = (facts: Partial<ConnectionDiagnosisInput>) =>
+    presentConnectionDiagnosis({ hostLabel: "Mac mini", state, via: "direct", now: NOW, ...facts });
+  const fact = (diagnosis: ReturnType<typeof withFacts>, label: string) =>
+    diagnosis?.facts.find(([name]) => name === label)?.[1];
+
+  it("blames this device first, then what the host last reported, then the peer list", () => {
+    const signedOutHost: ServerTailscaleStatus = {
+      state: "needs_login",
+      checkedAt: iso(NOW - 2 * HOUR),
+      magicDnsName: null,
+      keyExpiry: null,
+      issues: [{ cause: "needs_login", fix: "Run `sudo tailscale up` and log in." }],
+    };
+    const host = withFacts({ hostTailscale: signedOutHost });
+    expect(host?.headline).toBe("Tailscale on Mac mini is signed out (as of 2h ago)");
+    expect(host?.steps).toEqual(["On Mac mini: Run `sudo tailscale up` and log in."]);
+
+    const localDown = withFacts({
+      hostTailscale: signedOutHost,
+      localTailscale: { state: "needs_login", peers: [] },
+    });
+    expect(localDown?.headline).toBe("Tailscale on this device is signed out");
+
+    const running = (peers: ReadonlyArray<DesktopTailscalePeer>) =>
+      withFacts({ localTailscale: { state: "running", peers } });
+    const lastSeen = iso(NOW - 2 * HOUR);
+    expect(running([{ ...peer, online: false, lastSeen }])?.headline).toBe(
+      "Mac mini is offline on your tailnet (last seen 2h ago)",
+    );
+    expect(running([])?.headline).toBe("Mac mini is not on this device's tailnet");
+    // Online is only a hint, so the headline stays the generic one.
+    expect(running([peer])?.headline).toBe("Mac mini did not answer over Tailscale");
+  });
+
+  it("names the path to a peer only while it is active", () => {
+    const peerFact = (candidate: DesktopTailscalePeer) =>
+      fact(
+        withFacts({ localTailscale: { state: "running", peers: [candidate] } }),
+        "Tailscale peer",
+      );
+    expect(peerFact(peer)).toBe("online, DERP (fra)");
+    expect(peerFact({ ...peer, curAddr: "203.0.113.4:41641" })).toBe("online, direct");
+    expect(peerFact({ ...peer, peerRelay: "100.64.0.9:40000" })).toBe("online, peer relay");
+    expect(peerFact({ ...peer, active: false, curAddr: "203.0.113.4:41641" })).toBe("online");
+  });
+
+  it("shows only host issues that matter to someone connecting", () => {
+    const status = (issues: ServerTailscaleStatus["issues"]): ServerTailscaleStatus => ({
+      state: "running",
+      checkedAt: iso(NOW),
+      magicDnsName: null,
+      keyExpiry: iso(NOW + 3 * 24 * HOUR),
+      issues,
+    });
+    const https = { cause: "https_off", fix: "Turn on HTTPS." } as const;
+    const expiring = { cause: "key_expiring", fix: "Log in again." } as const;
+    expect(hostTailscaleNotice("Mac mini", status([https]), NOW)).toBeNull();
+    expect(hostTailscaleNotice("Mac mini", status([https, expiring]), NOW)?.headline).toBe(
+      "The Tailscale node key on Mac mini expires in 3 days",
     );
   });
 });
