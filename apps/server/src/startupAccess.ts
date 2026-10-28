@@ -10,6 +10,7 @@ import * as NetAddress from "effect/net/NetAddress";
 
 import * as ServerConfig from "./config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 
 export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
@@ -197,11 +198,19 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
   const serverConfig = yield* ServerConfig.ServerConfig;
   const httpServer = yield* HttpServer.HttpServer;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-  const connectionString = resolveHeadlessConnectionString(
-    serverConfig.host,
-    resolveListeningPort(httpServer.address, serverConfig.port),
-    { privateNetworkOnly: serverConfig.privateNetworkOnly },
-  );
+  // Direct endpoints list the Serve URL only once it answers as this server.
+  const servedEndpoint = serverConfig.tailscaleServeEnabled
+    ? (yield* (yield* DirectEndpoints.DirectEndpoints).resolve()).find((endpoint) =>
+        endpoint.httpBaseUrl.startsWith("https://"),
+      )
+    : undefined;
+  const connectionString = servedEndpoint
+    ? new URL(servedEndpoint.httpBaseUrl).origin
+    : resolveHeadlessConnectionString(
+        serverConfig.host,
+        resolveListeningPort(httpServer.address, serverConfig.port),
+        { privateNetworkOnly: serverConfig.privateNetworkOnly },
+      );
   const issued = yield* serverAuth.issueStartupPairingCredential();
 
   return {

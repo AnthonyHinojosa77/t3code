@@ -1026,6 +1026,9 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
+      ...(config.tailscaleServeEnabled
+        ? { awaitTailscaleServe: Deferred.await(tailscaleSettled) }
+        : {}),
     }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
 
     const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
