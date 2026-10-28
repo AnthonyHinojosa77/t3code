@@ -25,6 +25,7 @@ import {
   type ConnectionCredential,
   SshConnectionProfile,
   SshConnectionRegistration,
+  TailnetConnectionCredential,
   TailnetConnectionRegistration,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -38,7 +39,7 @@ import {
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
-import { connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
+import { connectionRoutes, routeEntry, routeHttpBaseUrl, sshTargetKey } from "./routes.ts";
 import {
   machinesToAdd,
   supportsTailnetSignIn,
@@ -209,6 +210,7 @@ const registerPairingConnection = Effect.fn(
 });
 
 const isBearerCredential = Schema.is(BearerConnectionCredential);
+const isTailnetCredential = Schema.is(TailnetConnectionCredential);
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 
 const updateBearerConnection = Effect.fn(
@@ -228,10 +230,28 @@ const updateBearerConnection = Effect.fn(
     entry?.target._tag === "BearerConnectionTarget"
       ? yield* credentials.get(entry.target.connectionId)
       : Option.none();
+  // A Tailscale session is pinned to where it signed in, so a new address signs in again.
+  const signInBaseUrl = Option.exists(credential, isTailnetCredential)
+    ? tailnetSignInBaseUrl(input.httpBaseUrl)
+    : null;
+  const signedIn =
+    signInBaseUrl === null || entry === undefined || signInBaseUrl === routeHttpBaseUrl(entry)
+      ? Option.none<TailnetConnectionRegistration>()
+      : yield* prepareTailnetRegistration({
+          httpBaseUrl: signInBaseUrl,
+          expectedEnvironmentId: input.environmentId,
+          joinsRoutes: true,
+        });
   const registration = yield* prepareBearerConnectionUpdate({
-    input,
+    input: Option.match(signedIn, {
+      onNone: () => input,
+      onSome: (fresh) => ({ ...input, httpBaseUrl: fresh.profile.httpBaseUrl }),
+    }),
     entry: Option.fromUndefinedOr(entry),
-    credential,
+    credential: Option.match(signedIn, {
+      onNone: () => credential,
+      onSome: (fresh) => Option.some<ConnectionCredential>(fresh.credential),
+    }),
   });
   yield* registry.register(registration);
 });
@@ -380,21 +400,19 @@ export const prepareBearerConnectionUpdate = Effect.fn(
   readonly credential: Option.Option<ConnectionCredential>;
 }) {
   const entry = Option.getOrNull(options.entry);
-  if (
-    entry === undefined ||
-    entry === null ||
-    entry.target._tag !== "BearerConnectionTarget" ||
-    Option.isNone(entry.profile) ||
-    !isBearerProfile(entry.profile.value)
-  ) {
+  const saved = entry === null ? null : Option.getOrNull(entry.profile);
+  if (entry === null || entry.target._tag !== "BearerConnectionTarget" || !isBearerProfile(saved)) {
     return yield* new ConnectionBlockedError({
       reason: "configuration",
       detail: "Only saved bearer environments can be edited.",
     });
   }
 
-  const credential = options.credential;
-  if (Option.isNone(credential) || !isBearerCredential(credential.value)) {
+  const credential = Option.getOrUndefined(options.credential);
+  if (
+    credential === undefined ||
+    (!isBearerCredential(credential) && !isTailnetCredential(credential))
+  ) {
     return yield* new ConnectionBlockedError({
       reason: "authentication",
       detail: "The saved bearer credential is unavailable.",
@@ -417,20 +435,48 @@ export const prepareBearerConnectionUpdate = Effect.fn(
       }),
   });
   const connectionId = entry.target.connectionId;
-  return new BearerConnectionRegistration({
-    target: new BearerConnectionTarget({
-      environmentId: options.input.environmentId,
-      label,
-      connectionId,
-    }),
+  const target = new BearerConnectionTarget({
+    environmentId: options.input.environmentId,
+    label,
+    connectionId,
+  });
+  if (isBearerCredential(credential)) {
+    return new BearerConnectionRegistration({
+      target,
+      profile: new BearerConnectionProfile({
+        connectionId,
+        environmentId: options.input.environmentId,
+        label,
+        httpBaseUrl,
+        wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+      }),
+      credential,
+    });
+  }
+  const moved = httpBaseUrl !== saved.httpBaseUrl;
+  // A Tailscale session works only at the address it signed in at.
+  if (moved && httpBaseUrl !== credential.signInBaseUrl) {
+    return yield* new ConnectionBlockedError({
+      reason: "configuration",
+      detail: "A Tailscale machine's address must be its Tailscale name or 100.x address.",
+    });
+  }
+  return new TailnetConnectionRegistration({
+    target,
     profile: new BearerConnectionProfile({
       connectionId,
       environmentId: options.input.environmentId,
       label,
       httpBaseUrl,
-      wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+      wsBaseUrl: moved ? deriveWsBaseUrl(httpBaseUrl) : saved.wsBaseUrl,
+      ...(moved
+        ? { authorization: "tailnet" as const, network: "tailscale" as const }
+        : {
+            ...(saved.authorization === undefined ? {} : { authorization: saved.authorization }),
+            ...(saved.network === undefined ? {} : { network: saved.network }),
+          }),
     }),
-    credential: credential.value,
+    credential,
   });
 });
 
@@ -514,9 +560,8 @@ export const make = Effect.gen(function* () {
     ),
     updateBearer: Effect.fnUntraced(
       function* (input) {
-        return yield* updateBearerConnection(input);
+        return yield* withTailnetServices(updateBearerConnection(input));
       },
-      Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
       Effect.provideService(ConnectionCredentialStore.ConnectionCredentialStore, credentials),
     ),
   });
