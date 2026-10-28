@@ -594,6 +594,11 @@ export const make = Effect.gen(function* () {
           const existing = connectionRoutes(previous);
           const sameAddress = findRouteToSameAddress(existing, route);
           const id = connectionRouteId(route.target);
+          // Registering replaces the route at the same address and the credential it held.
+          const replacedIds = new Set([
+            id,
+            ...(sameAddress === undefined ? [] : [connectionRouteId(sameAddress.target)]),
+          ]);
           const routes = existing.filter(
             (existing) =>
               (existing !== sameAddress || connectionRouteId(existing.target) === id) &&
@@ -601,7 +606,7 @@ export const make = Effect.gen(function* () {
               // sign-in; the next connect learns them again with the new one.
               !(
                 isLearned(existing) &&
-                credentialConnectionId(connectionRouteId(existing.target)) === id
+                replacedIds.has(credentialConnectionId(connectionRouteId(existing.target)))
               ),
           );
           const next = withRoutes(previous, upsertRoute(routes, route));

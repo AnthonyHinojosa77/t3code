@@ -1965,6 +1965,43 @@ describe("EnvironmentRegistry routes", () => {
     }),
   );
 
+  it.effect("pairing at a saved address under a new id drops routes learned over the old one", () =>
+    Effect.gen(function* () {
+      const learnedId = `learned:${LAN_TARGET.environmentId}:http://100.88.1.2:3773@${LAN_TARGET.connectionId}`;
+      const learned = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: learnedId });
+      const harness = yield* makeHarness(
+        [LAN_TARGET, learned, RELAY_TARGET],
+        [
+          LAN_PROFILE,
+          new BearerConnectionProfile({
+            connectionId: learnedId,
+            environmentId: LAN_TARGET.environmentId,
+            label: LAN_TARGET.label,
+            httpBaseUrl: "http://100.88.1.2:3773/",
+            wsBaseUrl: "ws://100.88.1.2:3773/",
+            learned: true,
+          }),
+        ],
+        [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+      );
+      const renamed = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: "bearer:renamed" });
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.register(
+          lanRegistration(
+            renamed,
+            new BearerConnectionProfile({ ...LAN_PROFILE, connectionId: renamed.connectionId }),
+          ),
+        );
+
+        expect(routesOf(yield* Ref.get(harness.storedTargets), LAN_TARGET.environmentId)).toEqual([
+          renamed,
+          RELAY_TARGET,
+        ]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect(
     "adding a saved SSH host again replaces its route, whatever id it was saved under",
     () =>
