@@ -22,6 +22,7 @@ import { fetchEnvironmentSessionState } from "../state/session.ts";
 import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
+import { offTailnetHint } from "./diagnosis.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import { BearerConnectionProfile } from "./catalog.ts";
@@ -1686,21 +1687,96 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
-  it.effect("keeps retrying when one route is blocked and another failed transiently", () =>
+  it.effect.each([
+    {
+      name: "keeps retrying when one route is blocked and another failed transiently",
+      lan: transient("LAN socket refused."),
+      relay: blocked("Sign in to T3 Connect."),
+      phase: "backoff",
+      reported: "lan",
+    },
+    {
+      name: "reports the host's refusal over a refusal on this device",
+      lan: new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "A Tailscale sign-in is only used on Tailscale addresses.",
+        hop: "device",
+      }),
+      relay: new ConnectionBlockedError({
+        reason: "permission",
+        detail: "The environment refused this device.",
+        hop: "server",
+      }),
+      phase: "blocked",
+      reported: "relay",
+    },
+  ] as const)("$name", ({ lan, relay, phase, reported }) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         checkRoute: () => Effect.succeed("answered"),
         prepare: (_attempt, target) =>
-          target._tag === "RelayConnectionTarget"
-            ? Effect.fail(blocked("Sign in to T3 Connect."))
-            : Effect.fail(transient("LAN socket refused.")),
+          Effect.fail(target._tag === "RelayConnectionTarget" ? relay : lan),
       });
       const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
+      const state = yield* awaitState(supervisor.state, (value) => value.phase === phase);
+      expect(state.lastFailure).toBe(reported === "lan" ? lan : relay);
+    }),
+  );
+
+  it.effect("skips routes that cannot use the environment's Tailscale sign-in", () =>
+    Effect.gen(function* () {
+      const tailnetTarget = new BearerConnectionTarget({
+        environmentId: TARGET.environmentId,
+        label: TARGET.label,
+        connectionId: `learned:${TARGET.environmentId}:http://100.88.1.2:3773@${LAN_TARGET.connectionId}`,
+      });
+      const entry = entryWithRoutes(LAN_ENTRY, [
+        LAN_ROUTE,
+        {
+          target: tailnetTarget,
+          profile: Option.some(
+            new BearerConnectionProfile({
+              connectionId: tailnetTarget.connectionId,
+              environmentId: TARGET.environmentId,
+              label: TARGET.label,
+              httpBaseUrl: "http://100.88.1.2:3773/",
+              wsBaseUrl: "ws://100.88.1.2:3773/",
+              learned: true,
+              authorization: "tailnet",
+              network: "tailscale",
+            }),
+          ),
+        },
+      ]);
+      const prepared = yield* Ref.make<ReadonlyArray<string>>([]);
+      const harness = yield* makeHarness({
+        checkRoute: (route) => Effect.succeed(route.target === LAN_TARGET ? "answered" : "silent"),
+        prepare: (_attempt, target) =>
+          Ref.update(prepared, (ids) => [...ids, connectionRouteId(target)]).pipe(
+            Effect.andThen(
+              Effect.fail(
+                target === LAN_TARGET
+                  ? new ConnectionBlockedError({
+                      reason: "configuration",
+                      detail: "A Tailscale sign-in is only used on Tailscale addresses.",
+                      hop: "device",
+                    })
+                  : transient("Tailscale did not answer."),
+              ),
+            ),
+          ),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(entry, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
       const state = yield* awaitState(supervisor.state, (value) => value.phase === "backoff");
-      expect(state.lastFailure?._tag).toBe("ConnectionTransientError");
+      expect(yield* Ref.get(prepared)).toEqual([tailnetTarget.connectionId]);
+      // The LAN answering while Tailscale does not points at this device's Tailscale.
+      expect(offTailnetHint(state)).toBe("Check that Tailscale is on for this device.");
     }),
   );
 

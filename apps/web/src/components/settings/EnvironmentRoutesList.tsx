@@ -28,6 +28,7 @@ import {
   isLearned,
   offTailnetHint,
   routeOutcomeText,
+  unusedWithTailnetSignIn,
 } from "@t3tools/client-runtime/connection";
 import { AsyncResult } from "effect/reactivity";
 import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
@@ -122,6 +123,7 @@ export function EnvironmentRoutesList({
                 position={index + 1}
                 inUse={connectionRouteId(route.target) === activeRouteId}
                 outcome={outcomes.get(connectionRouteId(route.target))}
+                unused={unusedWithTailnetSignIn(environment.entry, route)}
                 removable={routes.length > 1 && !isLearned(route)}
                 onRemove={() => void confirmRemove(route)}
               />
@@ -145,6 +147,7 @@ function SortableRouteRow({
   position,
   inUse,
   outcome,
+  unused,
   removable,
   onRemove,
 }: {
@@ -152,6 +155,7 @@ function SortableRouteRow({
   readonly position: number;
   readonly inUse: boolean;
   readonly outcome: ConnectionRouteOutcome | undefined;
+  readonly unused: boolean;
   readonly removable: boolean;
   readonly onRemove: () => void;
 }) {
@@ -183,6 +187,10 @@ function SortableRouteRow({
           {inUse ? (
             <span className="rounded-sm bg-success/12 px-1 text-2xs font-normal text-success-foreground">
               In use
+            </span>
+          ) : unused ? (
+            <span className="text-2xs font-normal text-muted-foreground">
+              Not used with Tailscale sign-in
             </span>
           ) : outcome !== undefined ? (
             <span

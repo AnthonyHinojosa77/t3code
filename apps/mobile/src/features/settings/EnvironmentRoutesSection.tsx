@@ -14,6 +14,7 @@ import {
   isLearned,
   offTailnetHint,
   routeOutcomeText,
+  unusedWithTailnetSignIn,
 } from "@t3tools/client-runtime/connection";
 import { type EnvironmentId, sessionGrantsScope } from "@t3tools/contracts";
 import { AUTH_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
@@ -36,6 +37,7 @@ import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsSection } from "./components/SettingsSection";
 
 const ICON_SIZE = Platform.OS === "android" ? 24 : 22;
+const UNUSED_WITH_TAILNET_SIGN_IN = "Not used with Tailscale sign-in";
 const REMOVE_SIZE = 20;
 
 const ROUTE_ICONS: Record<ConnectionRouteKind, AppSymbolName> = {
@@ -198,6 +200,7 @@ export function EnvironmentRoutesSection({
             count={routes.length}
             inUse={id === activeRouteId}
             outcome={outcomes.get(id)}
+            unused={unusedWithTailnetSignIn(entry, route)}
             editing={editing}
             offset={index === dragFrom ? (drag?.translation ?? 0) : shift}
             lifted={index === dragFrom}
@@ -235,6 +238,7 @@ function RouteRow(props: {
   readonly count: number;
   readonly inUse: boolean;
   readonly outcome: ConnectionRouteOutcome | undefined;
+  readonly unused: boolean;
   readonly editing: boolean;
   readonly offset: number;
   readonly lifted: boolean;
@@ -248,6 +252,13 @@ function RouteRow(props: {
   const { route, lifted, offset } = props;
   const label = connectionRouteLabel(route);
   const address = connectionRouteAddress(route);
+  const status = props.inUse
+    ? "In use"
+    : props.unused
+      ? UNUSED_WITH_TAILNET_SIGN_IN
+      : props.outcome
+        ? routeOutcomeText(props.outcome)
+        : null;
   const style = useAnimatedStyle(() => ({
     transform: [
       {
@@ -288,7 +299,7 @@ function RouteRow(props: {
           label,
           address,
           isLearned(route) ? "Found automatically" : null,
-          props.inUse ? "In use" : props.outcome ? routeOutcomeText(props.outcome) : null,
+          status,
           `Route ${props.position} of ${props.count}`,
         ]
           .filter((part) => part !== null)
@@ -313,6 +324,8 @@ function RouteRow(props: {
             </Text>
             {props.inUse ? (
               <StatusPill {...connectionTone("connected")} label="In use" size="compact" />
+            ) : props.unused ? (
+              <Text className="text-sm text-foreground-muted">{UNUSED_WITH_TAILNET_SIGN_IN}</Text>
             ) : props.outcome ? (
               <Text
                 className={cn(

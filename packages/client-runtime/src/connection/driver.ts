@@ -23,6 +23,7 @@ import {
   connectionRoutes,
   routeEntry,
   routeHttpBaseUrl,
+  unusedWithTailnetSignIn,
   usableRoutes,
 } from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
@@ -107,7 +108,8 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     );
     if (result._tag === "Failure") {
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
-      else blocked ??= result.failure;
+      // The host's own refusal says more than this device's.
+      else if (blocked === undefined || blocked.hop === "device") blocked = result.failure;
     }
     yield* reportRoute(
       result._tag === "Success"
@@ -118,6 +120,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   });
   const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
   for (const [index, route] of routes.entries()) {
+    if (unusedWithTailnetSignIn(entry, route)) continue;
     const check =
       checks.length === 0
         ? "unchecked"
@@ -148,6 +151,9 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
+  // A skipped route's check still tells the diagnosis whether this device
+  // reaches the host off Tailscale. Every check is bounded.
+  yield* Fiber.joinAll(checks);
   return yield* (
     transient ??
       blocked ??

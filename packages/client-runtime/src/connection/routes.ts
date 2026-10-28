@@ -361,6 +361,29 @@ export function usableRoutes(entry: ConnectionCatalogEntry): ReadonlyArray<Conne
   return routes.filter((route) => !sendsTokenInClear(routes, route));
 }
 
+/**
+ * Whether a route shares a Tailscale sign-in it cannot use. The resolver
+ * refuses the session off the host's tailnet and Serve routes, so a connect
+ * skips them and a route list shows them as unused, not failed.
+ */
+export function unusedWithTailnetSignIn(
+  entry: ConnectionCatalogEntry,
+  route: ConnectionRoute,
+): boolean {
+  if (route.target._tag !== "BearerConnectionTarget" || connectionRouteKind(route) === "tailnet") {
+    return false;
+  }
+  const credentialId = credentialConnectionId(route.target.connectionId);
+  return connectionRoutes(entry).some((candidate) => {
+    const profile = Option.getOrNull(candidate.profile);
+    return (
+      profile?._tag === "BearerConnectionProfile" &&
+      profile.authorization === "tailnet" &&
+      credentialConnectionId(connectionRouteId(candidate.target)) === credentialId
+    );
+  });
+}
+
 export interface ReportedEndpoint {
   readonly httpBaseUrl: string;
   readonly kind?: string;
