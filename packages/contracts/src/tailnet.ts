@@ -53,11 +53,18 @@ export const TailnetDeviceList = Schema.Struct({
 });
 export type TailnetDeviceList = typeof TailnetDeviceList.Type;
 
+/** A dotted IPv4 address in 100.64.0.0/10, where Tailscale assigns node addresses. */
+export const TailnetIpv4 = Schema.String.check(
+  Schema.isPattern(
+    /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}$/u,
+  ),
+);
+
 /** Another T3 Code environment on this host's tailnet. Holds no route or credential. */
 export const TailnetPeerEnvironment = Schema.Struct({
   name: TrimmedNonEmptyString,
   magicDnsName: Schema.NullOr(TrimmedNonEmptyString),
-  tailnetIpv4: TrimmedNonEmptyString,
+  tailnetIpv4: TailnetIpv4,
   environmentId: EnvironmentId,
 });
 export type TailnetPeerEnvironment = typeof TailnetPeerEnvironment.Type;

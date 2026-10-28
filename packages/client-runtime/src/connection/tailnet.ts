@@ -1,10 +1,12 @@
-import type {
-  AuthClientPresentationMetadata,
-  EnvironmentId,
-  TailnetPeerEnvironment,
-  TailnetSignInRefusedReason,
+import {
+  type AuthClientPresentationMetadata,
+  type EnvironmentId,
+  TailnetIpv4,
+  type TailnetPeerEnvironment,
+  type TailnetSignInRefusedReason,
 } from "@t3tools/contracts";
 import { isSharedAddressSpaceHost, normalizeHostname } from "@t3tools/shared/hostClassification";
+import * as Schema from "effect/Schema";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, ConnectionTransientError } from "./model.ts";
@@ -14,6 +16,8 @@ import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 export const TAILNET_SIGN_IN_PORT = 3773;
 
 const SINGLE_LABEL_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+
+const isTailnetIpv4 = Schema.is(TailnetIpv4);
 
 function isTailnetName(hostname: string): boolean {
   if (hostname.endsWith(".ts.net")) return true;
@@ -41,7 +45,10 @@ export function tailnetSignInBaseUrl(input: string): string | null {
   if (url.pathname !== "/" || url.search !== "" || url.hash !== "") return null;
   const hostname = normalizeHostname(url.hostname);
   if (!isSharedAddressSpaceHost(hostname) && !isTailnetName(hostname)) return null;
-  return `http://${hostname}:${url.port === "" ? TAILNET_SIGN_IN_PORT : url.port}/`;
+  // URL drops the default port, so a typed `:80` would read as no port at all.
+  const typedPort = /^(?:[a-z][a-z\d+.-]*:\/\/)?[^/?#]*:\d+(?:[/?#]|$)/iu.test(trimmed);
+  const port = url.port !== "" ? url.port : typedPort ? "80" : String(TAILNET_SIGN_IN_PORT);
+  return `http://${hostname}:${port}/`;
 }
 
 /** Hosts refuse browser origins, and a page on plain `http://100.x` cannot make a DPoP key. */
@@ -96,6 +103,8 @@ export function discoveredMachineAction(input: {
   readonly dismissed: ReadonlySet<EnvironmentId>;
 }): DiscoveredMachineAction {
   const { machine } = input;
+  // A connected host could name a LAN address; sign-in goes only to a tailnet one.
+  if (!isTailnetIpv4(machine.tailnetIpv4)) return { _tag: "Skip" };
   if (input.dismissed.has(machine.environmentId)) return { _tag: "Skip" };
   const saved = input.entries.get(machine.environmentId);
   if (saved === undefined) return { _tag: "Add" };

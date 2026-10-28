@@ -35,6 +35,7 @@ describe("tailnetSignInBaseUrl", () => {
     ["Studio.tail1234.ts.net", "http://studio.tail1234.ts.net:3773/"],
     ["100.88.1.2", "http://100.88.1.2:3773/"],
     ["100.88.1.2:4000", "http://100.88.1.2:4000/"],
+    ["100.88.1.2:80", "http://100.88.1.2:80/"],
     // The `t3 up` QR holds a plain URL with no secret.
     ["http://100.88.1.2:3773", "http://100.88.1.2:3773/"],
     [" studio:3773 ", "http://studio:3773/"],
@@ -71,6 +72,19 @@ describe("discoveredMachineAction", () => {
       discoveredMachineAction({ machine, entries: new Map(), dismissed: new Set([STUDIO]) }),
     ).toEqual({ _tag: "Skip" });
   });
+
+  it.each(["192.168.1.10", "100.63.0.1", "100.064.1.2", "studio"])(
+    "never signs in at %j, which a host reported as its tailnet address",
+    (tailnetIpv4) => {
+      expect(
+        discoveredMachineAction({
+          machine: { ...machine, tailnetIpv4 },
+          entries: new Map(),
+          dismissed: new Set(),
+        }),
+      ).toEqual({ _tag: "Skip" });
+    },
+  );
 
   it("warns when a saved machine answers at an address it was not saved with", () => {
     const entries = (entry: ConnectionCatalogEntry) => new Map([[STUDIO, entry]]);
