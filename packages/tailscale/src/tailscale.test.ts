@@ -1,22 +1,33 @@
+import * as NodeNet from "node:net";
+
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
+  claimTailscaleServe,
   ensureTailscaleServe,
   parseTailscaleExitNode,
   parseTailscaleSshEnabled,
   parseTailscaleStatus,
+  parseTailscaleWhois,
+  probeTailscaleHttpsEndpoint,
   readTailscaleSshEnabled,
   readTailscaleStatus,
+  readTailscaleWhois,
+  releaseTailscaleServe,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
   TailscaleStatusParseError,
+  TailscaleWhoisParseError,
 } from "./tailscale.ts";
 
 const encoder = new TextEncoder();
@@ -50,6 +61,49 @@ function assertCarriesNoSecret(error: object, secret: string): void {
   walk(error, "error");
 }
 const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
+
+// 9007199254740993 is 2^53 + 1, which a JS number rounds to 2^53.
+const fullStatusJson = `{
+  "BackendState": "NeedsLogin",
+  "TUN": false,
+  "Health": ["Tailscale could not connect to the relay server."],
+  "CertDomains": ["desktop.tail.ts.net"],
+  "CurrentTailnet": { "Name": "theo@", "MagicDNSEnabled": true },
+  "Self": {
+    "ID": "nSelf",
+    "UserID": 9007199254740993,
+    "DNSName": "desktop.tail.ts.net.",
+    "TailscaleIPs": ["100.100.100.100"],
+    "KeyExpiry": "2026-12-23T01:09:33Z",
+    "CapMap": { "https": null }
+  },
+  "Peer": {
+    "nodekey:a": {
+      "ID": "nOwn", "HostName": "studio", "DNSName": "studio.tail.ts.net.", "OS": "linux",
+      "UserID": 9007199254740993, "TailscaleIPs": ["100.88.1.2", "fd7a:115c:a1e0::2"],
+      "Online": true, "Active": true, "CurAddr": "192.168.1.5:41641", "Relay": "sfo",
+      "PeerRelay": "", "LastSeen": "0001-01-01T00:00:00Z"
+    },
+    "nodekey:b": {
+      "ID": "nTagged", "UserID": 123, "Tags": ["tag:server"], "Online": false,
+      "LastSeen": "2026-10-27T10:00:00Z", "Expired": true
+    },
+    "nodekey:c": { "ID": "nShared", "UserID": 456, "AltSharerUserID": 789 },
+    "nodekey:d": { "ID": "nSharee", "UserID": 457, "ShareeNode": true },
+    "nodekey:e": { "HostName": "no-id" },
+    "nodekey:f": { "ID": "nOdd", "HostName": 7, "Online": "yes" }
+  }
+}`;
+
+// Shaped like `tailscale whois --json` on Tailscale 1.102.2 for an untagged owner node.
+const whoisJson = (node: string = "") => `{
+  "Node": {
+    "ID": 42, "StableID": "nOwn", "Name": "studio.tail.ts.net.", "User": 9007199254740993,
+    "Addresses": ["100.88.1.2/32"], "AllowedIPs": ["100.88.1.2/32"],
+    "ComputedName": "studio", "Hostinfo": { "OS": "linux" }${node}
+  },
+  "UserProfile": { "ID": 9007199254740993, "LoginName": "theo@example.com", "DisplayName": "Theo" }
+}`;
 
 function mockHandle(result: { stdout?: string; stderr?: string; code?: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -93,6 +147,57 @@ function layerMockSpawner(
   );
 }
 
+function layerServeFixture(
+  rootProxy: string | null,
+  listener: object = { HTTPS: true },
+  extra: object = {},
+) {
+  const writes: Array<ReadonlyArray<string>> = [];
+  const serveStatus = JSON.stringify({
+    TCP: { "443": listener },
+    Web: {
+      "desktop.tail.ts.net:443": {
+        Handlers: {
+          ...(rootProxy === null ? {} : { "/": { Proxy: rootProxy } }),
+          "/keep/": { Proxy: "http://127.0.0.1:8081" },
+        },
+      },
+    },
+    ...extra,
+  });
+  const layer = layerMockSpawner((_command, args) => {
+    if (args.join(" ") === "serve status --json") {
+      return { stdout: serveStatus };
+    }
+    writes.push(args);
+    return {};
+  });
+  return { layer, writes };
+}
+
+/** A loopback port with a listener for the rest of the scope. */
+const listenOnLoopback = Effect.acquireRelease(
+  Effect.callback<NodeNet.Server>((resume) => {
+    const server = NodeNet.createServer();
+    server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+  }),
+  (server) =>
+    Effect.callback<void>((resume) => {
+      server.close(() => resume(Effect.void));
+    }),
+).pipe(
+  Effect.map((server) => {
+    const address = server.address();
+    return typeof address === "object" && address !== null ? address.port : 0;
+  }),
+);
+
+const layerEnvironmentAnswer = (response: () => Response) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, response()))),
+  );
+
 describe("tailscale", () => {
   it.effect("parses status facts", () =>
     Effect.gen(function* () {
@@ -101,7 +206,66 @@ describe("tailscale", () => {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
         httpsServeEnabled: null,
+        backendState: null,
+        selfNodeId: null,
+        selfUserId: null,
+        selfTags: [],
+        keyExpiry: null,
+        keyExpired: false,
+        health: [],
+        magicDnsEnabled: null,
+        certDomains: [],
+        userspaceNetworking: null,
+        peers: [],
       });
+    }),
+  );
+
+  it.effect("parses host facts and peers, keeping user IDs past 2^53 exact", () =>
+    Effect.gen(function* () {
+      const status = yield* parseTailscaleStatus(fullStatusJson);
+      assert.deepInclude(status, {
+        backendState: "NeedsLogin",
+        selfNodeId: "nSelf",
+        selfUserId: "9007199254740993",
+        selfTags: [],
+        keyExpiry: "2026-12-23T01:09:33Z",
+        health: ["Tailscale could not connect to the relay server."],
+        magicDnsEnabled: true,
+        certDomains: ["desktop.tail.ts.net"],
+        userspaceNetworking: true,
+        httpsServeEnabled: true,
+      });
+      assert.deepEqual(
+        status.peers.map((peer) => [peer.stableNodeId, peer.userId, peer.tags, peer.sharedIn]),
+        [
+          ["nOwn", "9007199254740993", [], false],
+          ["nTagged", "123", ["tag:server"], false],
+          ["nShared", "456", [], true],
+          ["nSharee", "457", [], true],
+          ["nOdd", null, [], false],
+        ],
+      );
+      assert.deepEqual(status.peers[0], {
+        stableNodeId: "nOwn",
+        hostName: "studio",
+        magicDnsName: "studio.tail.ts.net",
+        os: "linux",
+        tailnetIpv4Addresses: ["100.88.1.2"],
+        userId: "9007199254740993",
+        tags: [],
+        sharedIn: false,
+        online: true,
+        lastSeen: null,
+        keyExpired: false,
+        active: true,
+        curAddr: "192.168.1.5:41641",
+        relay: "sfo",
+        peerRelay: null,
+      });
+      assert.deepInclude(status.peers[1], { online: false, keyExpired: true, active: false });
+      // A field of an unexpected type reads as absent instead of failing the whole status.
+      assert.deepInclude(status.peers[4], { hostName: null, online: false });
     }),
   );
 
@@ -243,6 +407,262 @@ describe("tailscale", () => {
       yield* readTailscaleStatus.pipe(Effect.provide(layer));
       yield* readTailscaleSshEnabled.pipe(Effect.provide(layer));
       assert.deepEqual(killGraces, [500, 500]);
+    });
+  });
+
+  it.effect("reads whois facts and treats omitted optional fields as empty", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const layer = layerMockSpawner((_command, args) => {
+      calls.push(args);
+      return { stdout: whoisJson() };
+    });
+
+    return Effect.gen(function* () {
+      assert.deepEqual(yield* readTailscaleWhois("100.88.1.2").pipe(Effect.provide(layer)), {
+        stableNodeId: "nOwn",
+        userId: "9007199254740993",
+        addresses: ["100.88.1.2/32"],
+        allowedIps: ["100.88.1.2/32"],
+        tags: [],
+        primaryRoutes: [],
+        sharerUserId: null,
+        computedName: "studio",
+        os: "linux",
+        loginName: "theo@example.com",
+        displayName: "Theo",
+      });
+      assert.deepEqual(calls, [["whois", "--json", "--", "100.88.1.2"]]);
+
+      const routerShared = yield* parseTailscaleWhois(
+        whoisJson(`, "Tags": ["tag:server"], "PrimaryRoutes": ["10.0.0.0/24"], "Sharer": 77`),
+      );
+      assert.deepInclude(routerShared, {
+        tags: ["tag:server"],
+        primaryRoutes: ["10.0.0.0/24"],
+        sharerUserId: "77",
+      });
+    });
+  });
+
+  it.effect("refuses whois output missing a required node field or with a malformed one", () =>
+    Effect.gen(function* () {
+      const node = (JSON.parse(whoisJson()) as { Node: Record<string, unknown> }).Node;
+      for (const field of ["StableID", "User", "Addresses", "AllowedIPs"]) {
+        const { [field]: _removed, ...rest } = node;
+        const error = yield* parseTailscaleWhois(JSON.stringify({ Node: rest })).pipe(Effect.flip);
+        assert.instanceOf(error, TailscaleWhoisParseError, field);
+      }
+      // Reading a malformed Tags as "no tags" would pass a tagged node as untagged.
+      const malformedTags = yield* parseTailscaleWhois(whoisJson(`, "Tags": "tag:server"`)).pipe(
+        Effect.flip,
+      );
+      assert.instanceOf(malformedTags, TailscaleWhoisParseError);
+    }),
+  );
+
+  it.effect("finds the macOS CLI outside PATH and keeps paths out of errors", () => {
+    const appBundle = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+    const attempt = (platform: NodeJS.Platform, installedAt: string | null) => {
+      const tried: Array<{ readonly command: string; readonly beCli: string | undefined }> = [];
+      const layer = Layer.merge(
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand") return Effect.die("unexpected pipeline");
+            tried.push({
+              command: command.command,
+              beCli: command.options.env?.["TAILSCALE_BE_CLI"],
+            });
+            return command.command === installedAt
+              ? Effect.succeed(mockHandle({ stdout: tailscaleStatusJson }))
+              : Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "ChildProcess",
+                    method: "spawn",
+                    pathOrDescriptor: command.command,
+                  }),
+                );
+          }),
+        ),
+        Layer.succeed(HostProcess.Platform, platform),
+      );
+      return readTailscaleStatus.pipe(
+        Effect.result,
+        Effect.map((result) => ({ result, tried })),
+        Effect.provide(layer),
+      );
+    };
+
+    return Effect.gen(function* () {
+      const found = yield* attempt("darwin", appBundle);
+      assert.isTrue(Result.isSuccess(found.result));
+      assert.deepEqual(found.tried, [
+        { command: "tailscale", beCli: undefined },
+        { command: "/usr/local/bin/tailscale", beCli: undefined },
+        { command: "/opt/homebrew/bin/tailscale", beCli: undefined },
+        { command: appBundle, beCli: "1" },
+      ]);
+
+      const missing = yield* attempt("darwin", null);
+      assert.isTrue(Result.isFailure(missing.result));
+      if (Result.isFailure(missing.result)) {
+        const error = missing.result.failure;
+        assert.instanceOf(error, TailscaleCommandSpawnError);
+        assert.equal(error.executable, "tailscale");
+        assert.notInclude(error.message, "/");
+      }
+
+      const linux = yield* attempt("linux", null);
+      assert.deepEqual(
+        linux.tried.map((entry) => entry.command),
+        ["tailscale"],
+      );
+    });
+  });
+
+  it.effect("counts a Serve URL as reachable only when it answers as this environment", () =>
+    Effect.gen(function* () {
+      const probe = (response: () => Response) =>
+        probeTailscaleHttpsEndpoint({
+          baseUrl: "https://desktop.tail.ts.net/",
+          environmentId: "this-server",
+        }).pipe(Effect.provide(layerEnvironmentAnswer(response)));
+
+      const descriptor = (environmentId: string) =>
+        new Response(JSON.stringify({ environmentId, label: "desktop" }));
+      assert.isTrue(yield* probe(() => descriptor("this-server")));
+      assert.isFalse(yield* probe(() => descriptor("other-server")));
+      assert.isFalse(yield* probe(() => new Response("<html>proxy</html>")));
+      assert.isFalse(yield* probe(() => new Response(null, { status: 502 })));
+    }),
+  );
+
+  it.live("leaves a Serve root that fronts another running server in place", () =>
+    Effect.gen(function* () {
+      const runningPort = yield* listenOnLoopback;
+      const fixture = layerServeFixture(`http://127.0.0.1:${runningPort}`);
+
+      const claimed = yield* claimTailscaleServe({ localPort: 3774 }).pipe(
+        Effect.result,
+        Effect.provide(fixture.layer),
+      );
+      assert.deepEqual(fixture.writes, []);
+      assert.isTrue(
+        Result.isFailure(claimed) && claimed.failure._tag === "TailscaleServeOccupiedError",
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("leaves Funnel, plain HTTP, foreground and ambiguous hostname mappings untouched", () =>
+    Effect.gen(function* () {
+      for (const [listener, extra] of [
+        [{ HTTP: true }, {}],
+        [{ HTTPS: true }, { AllowFunnel: { "desktop.tail.ts.net:443": true } }],
+        [
+          { HTTPS: true },
+          {
+            Web: {
+              "old.tail.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3773" } } },
+              "desktop.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "http://another-server:3774" } },
+              },
+            },
+          },
+        ],
+        [
+          { HTTPS: true },
+          {
+            Foreground: {
+              session: {
+                TCP: { "443": { HTTPS: true } },
+                Web: {
+                  "desktop.tail.ts.net:443": {
+                    Handlers: { "/": { Proxy: "http://127.0.0.1:3773" } },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      ] as const) {
+        const fixture = layerServeFixture(null, listener, extra);
+        const claimed = yield* claimTailscaleServe({ localPort: 3773 }).pipe(
+          Effect.result,
+          Effect.provide(fixture.layer),
+        );
+        assert.isTrue(
+          Result.isFailure(claimed) && claimed.failure._tag === "TailscaleServeOccupiedError",
+        );
+        assert.isFalse(
+          yield* releaseTailscaleServe({ localPort: 3773 }).pipe(Effect.provide(fixture.layer)),
+        );
+        assert.deepEqual(fixture.writes, []);
+      }
+    }),
+  );
+
+  it.effect("claims a free Serve port and does not write when Serve status is unreadable", () =>
+    Effect.gen(function* () {
+      for (const [stdout, claims] of [
+        ["null\n", true],
+        ["{}", true],
+        ["", false],
+        ["not-json", false],
+      ] as const) {
+        const writes: Array<ReadonlyArray<string>> = [];
+        const layer = layerMockSpawner((_command, args) => {
+          if (args.join(" ") === "serve status --json") return { stdout };
+          writes.push(args);
+          return {};
+        });
+        const claimed = yield* claimTailscaleServe({ localPort: 3773 }).pipe(
+          Effect.result,
+          Effect.provide(layer),
+        );
+        if (claims) {
+          assert.isTrue(Result.isSuccess(claimed), stdout);
+          assert.deepEqual(writes, [["serve", "--bg", "--https=443", "http://127.0.0.1:3773"]]);
+        } else {
+          assert.isTrue(
+            Result.isFailure(claimed) && claimed.failure._tag === "TailscaleStatusParseError",
+          );
+          const released = yield* releaseTailscaleServe({ localPort: 3773 }).pipe(
+            Effect.flip,
+            Effect.provide(layer),
+          );
+          assert.instanceOf(released, TailscaleStatusParseError);
+          assert.deepEqual(writes, []);
+        }
+      }
+    }),
+  );
+
+  it.live("replaces a Serve root left behind by a stopped server", () =>
+    Effect.gen(function* () {
+      const stoppedPort = yield* Effect.scoped(listenOnLoopback);
+      const fixture = layerServeFixture(`http://127.0.0.1:${stoppedPort}`);
+
+      yield* claimTailscaleServe({ localPort: 3773 }).pipe(Effect.provide(fixture.layer));
+      assert.deepEqual(fixture.writes, [["serve", "--bg", "--https=443", "http://127.0.0.1:3773"]]);
+    }),
+  );
+
+  it.effect("removes only its own Serve root on release", () => {
+    const fixture = layerServeFixture("http://127.0.0.1:3773");
+
+    return Effect.gen(function* () {
+      const releasedOther = yield* releaseTailscaleServe({ localPort: 3774 }).pipe(
+        Effect.provide(fixture.layer),
+      );
+      assert.deepEqual(fixture.writes, []);
+      assert.isFalse(releasedOther);
+
+      const releasedOwn = yield* releaseTailscaleServe({ localPort: 3773 }).pipe(
+        Effect.provide(fixture.layer),
+      );
+      assert.deepEqual(fixture.writes, [["serve", "--https=443", "--set-path=/", "off"]]);
+      assert.isTrue(releasedOwn);
     });
   });
 });

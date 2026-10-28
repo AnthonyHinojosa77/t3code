@@ -5,6 +5,7 @@ import {
   isTailscaleIpv4Address,
   parseTailscaleStatus,
   probeTailscaleHttpsEndpoint,
+  readT3EnvironmentId,
   readTailscaleStatus,
   type TailscaleStatus,
 } from "@t3tools/tailscale";
@@ -77,6 +78,7 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
   readonly dnsName: string | null;
   readonly serveEnabled: boolean;
   readonly servePort?: number;
+  readonly localHttpUrl: string;
   readonly probe?: (baseUrl: string) => Effect.Effect<boolean, never, HttpClient.HttpClient>;
 }): Effect.fn.Return<Option.Option<AdvertisedEndpoint>, never, HttpClient.HttpClient> {
   if (!input.dnsName) {
@@ -87,11 +89,18 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
     magicDnsName: input.dnsName,
     ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
   });
+  // Serve may front another server on this port, so the URL must answer as this backend.
   const probe =
     input.probe?.(httpBaseUrl) ??
-    probeTailscaleHttpsEndpoint({
-      baseUrl: httpBaseUrl,
-    });
+    readT3EnvironmentId({ baseUrl: input.localHttpUrl }).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(false),
+          onSome: (environmentId) =>
+            probeTailscaleHttpsEndpoint({ baseUrl: httpBaseUrl, environmentId }),
+        }),
+      ),
+    );
   const isReachable = input.serveEnabled ? yield* probe : false;
 
   return Option.some(
@@ -116,6 +125,8 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
     readonly port: number;
     readonly serveEnabled?: boolean;
     readonly servePort?: number;
+    /** This desktop's backend, which reports the environment ID the Serve URL must match. */
+    readonly localHttpUrl: string;
     readonly networkInterfaces: NetworkInterfaces;
     readonly statusJson?: string | null;
     readonly readStatus?: Effect.Effect<
@@ -141,6 +152,7 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
     const magicDnsEndpoint = yield* resolveTailscaleMagicDnsAdvertisedEndpoint({
       dnsName: status?.magicDnsName ?? null,
       serveEnabled: input.serveEnabled === true,
+      localHttpUrl: input.localHttpUrl,
       ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
       ...(input.probe === undefined ? {} : { probe: input.probe }),
     });
