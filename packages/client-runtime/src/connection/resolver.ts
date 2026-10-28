@@ -182,7 +182,8 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
     }
     const credentialId = credentialConnectionId(target.connectionId);
     const session = yield* remote.signInTailnet({ httpBaseUrl: profile.httpBaseUrl });
-    yield* credentials.put(credentialId, session);
+    // Profile first: a Tailscale session under the old profile is refused on
+    // every connect, while the old token under the new one signs in again.
     yield* profiles.put(
       new BearerConnectionProfile({
         connectionId: profile.connectionId,
@@ -195,6 +196,7 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
         network: "tailscale",
       }),
     );
+    yield* credentials.put(credentialId, session);
     return yield* remote.authorizeTailnet({
       expectedEnvironmentId: target.environmentId,
       credentialId,

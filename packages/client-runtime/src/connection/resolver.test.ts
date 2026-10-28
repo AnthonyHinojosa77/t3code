@@ -446,9 +446,28 @@ describe("ConnectionResolver", () => {
       });
       const paired = bearerRoute("paired", "http://100.88.1.2:3773/");
       const ticketRequests = yield* Ref.make(0);
+      const profileWriteFailed = new ConnectionTransientError({
+        reason: "remote-unavailable",
+        detail: "Could not save the connection profile.",
+      });
+      const profileWrites = yield* Ref.make(0);
+      const savedProfiles = new Map<string, ConnectionProfile>();
       const dependencies = (surface: "web" | "mobile") =>
         makeDependencies({
           credentials: [["paired", new BearerConnectionCredential({ token: "expired" })]],
+          profileStore: {
+            get: (connectionId) =>
+              Effect.sync(() => Option.fromNullishOr(savedProfiles.get(connectionId))),
+            put: (profile) =>
+              Ref.updateAndGet(profileWrites, (count) => count + 1).pipe(
+                Effect.flatMap((count) =>
+                  count === 1
+                    ? Effect.fail(profileWriteFailed)
+                    : Effect.sync(() => void savedProfiles.set(profile.connectionId, profile)),
+                ),
+              ),
+            remove: () => Effect.die("unused"),
+          },
           surface,
           tailnetSignIn: true,
           authorizeBearer: () => Effect.fail(ended),
@@ -488,6 +507,8 @@ describe("ConnectionResolver", () => {
       const layerMobile = yield* dependencies("mobile");
       const { prepared, profile, credential } = yield* Effect.gen(function* () {
         const broker = yield* ConnectionResolver.ConnectionResolver;
+        // A failed profile write keeps the old session, so the retry signs in again.
+        expect(yield* Effect.flip(broker.prepare(paired.entry))).toBe(profileWriteFailed);
         // The first connect after sign-in fails, and the retry still holds the old profile.
         expect(yield* Effect.flip(broker.prepare(paired.entry))).toMatchObject({
           _tag: "ConnectionTransientError",
