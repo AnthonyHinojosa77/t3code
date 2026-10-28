@@ -209,6 +209,8 @@ describe("DesktopServerExposure", () => {
           advertisedHost: "192.168.1.20",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          tailscaleSignInEnabled: false,
+          port: 4173,
         });
 
         const backendConfig = yield* serverExposure.backendConfig;
@@ -267,6 +269,43 @@ describe("DesktopServerExposure", () => {
         assert.equal(persisted.tailscaleServePort, 8443);
       }),
     ),
+  );
+
+  it.effect(
+    "listens on the tailnet only while Tailscale sign-in is on and Network access is off",
+    () =>
+      withHarness(
+        lanNetworkInterfaces,
+        Effect.gen(function* () {
+          const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+          yield* (yield* DesktopAppSettings.DesktopAppSettings).load;
+          yield* serverExposure.configureFromSettings({ port: 3773 });
+
+          const signIn = yield* serverExposure.setTailscaleSignInEnabled(true);
+          assert.equal(signIn.requiresRelaunch, true);
+          assert.equal(signIn.state.tailscaleSignInEnabled, true);
+          assert.equal(signIn.state.port, 3773);
+          assert.deepInclude(yield* serverExposure.backendConfig, {
+            bindHost: "0.0.0.0",
+            tailscaleSignInEnabled: true,
+            tailscaleOnly: true,
+          });
+
+          yield* serverExposure.setMode("network-accessible");
+          assert.deepInclude(yield* serverExposure.backendConfig, {
+            bindHost: "0.0.0.0",
+            tailscaleOnly: false,
+          });
+
+          yield* serverExposure.setMode("local-only");
+          yield* serverExposure.setTailscaleSignInEnabled(false);
+          assert.deepInclude(yield* serverExposure.backendConfig, {
+            bindHost: "127.0.0.1",
+            tailscaleSignInEnabled: false,
+            tailscaleOnly: false,
+          });
+        }),
+      ),
   );
 
   it.effect("keeps a Tailscale Serve change made while a mode change is saving", () =>

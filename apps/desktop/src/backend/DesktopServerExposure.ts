@@ -244,6 +244,18 @@ export class DesktopTailscaleServePersistenceError extends Schema.TaggedError<De
   }
 }
 
+export class DesktopTailscaleSignInPersistenceError extends Schema.TaggedError<DesktopTailscaleSignInPersistenceError>()(
+  "DesktopTailscaleSignInPersistenceError",
+  {
+    enabled: Schema.Boolean,
+    cause: Schema.instanceOf(DesktopAppSettings.DesktopSettingsWriteError),
+  },
+) {
+  override get message(): string {
+    return `Failed to persist desktop Tailscale sign-in (enabled: ${this.enabled}).`;
+  }
+}
+
 export const DesktopServerExposureSetModeError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
@@ -254,6 +266,7 @@ export const DesktopServerExposureError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
   DesktopTailscaleServePersistenceError,
+  DesktopTailscaleSignInPersistenceError,
 ]);
 export type DesktopServerExposureError = typeof DesktopServerExposureError.Type;
 
@@ -263,6 +276,9 @@ export interface DesktopServerExposureBackendConfig {
   readonly httpBaseUrl: URL;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly tailscaleSignInEnabled: boolean;
+  /** Sign-in on with Network access off: listen on every interface, accept only tailnet peers. */
+  readonly tailscaleOnly: boolean;
 }
 
 export interface DesktopServerExposureChange {
@@ -285,6 +301,9 @@ export class DesktopServerExposure extends Context.Service<
       readonly enabled: boolean;
       readonly port?: number;
     }) => Effect.Effect<DesktopServerExposureChange, DesktopTailscaleServePersistenceError>;
+    readonly setTailscaleSignInEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopServerExposureChange, DesktopTailscaleSignInPersistenceError>;
     readonly getAdvertisedEndpoints: Effect.Effect<readonly AdvertisedEndpoint[]>;
   }
 >()("@t3tools/desktop/backend/DesktopServerExposure") {}
@@ -301,6 +320,8 @@ interface RuntimeState {
   readonly advertisedHost: Option.Option<string>;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly tailscaleSignInEnabled: boolean;
+  readonly tailscaleOnly: boolean;
 }
 
 interface ResolvedRuntimeState {
@@ -326,6 +347,8 @@ const toContractState = (state: RuntimeState): DesktopServerExposureState => ({
   advertisedHost: Option.getOrNull(state.advertisedHost),
   tailscaleServeEnabled: state.tailscaleServeEnabled,
   tailscaleServePort: state.tailscaleServePort,
+  tailscaleSignInEnabled: state.tailscaleSignInEnabled,
+  port: state.port,
 });
 
 const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
@@ -334,6 +357,8 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
   httpBaseUrl: state.httpBaseUrl,
   tailscaleServeEnabled: state.tailscaleServeEnabled,
   tailscaleServePort: state.tailscaleServePort,
+  tailscaleSignInEnabled: state.tailscaleSignInEnabled,
+  tailscaleOnly: state.tailscaleOnly,
 });
 
 const toResolvedExposure = (state: RuntimeState): ResolvedDesktopServerExposure => ({
@@ -351,11 +376,15 @@ function runtimeStateFromResolvedExposure(input: {
   readonly exposure: ResolvedDesktopServerExposure;
   readonly port: number;
 }): RuntimeState {
+  // Other tailnet devices sign in at the tailnet address, so a local-only backend
+  // listens on every interface and the server accepts only loopback and tailnet peers.
+  const tailscaleOnly =
+    input.settings.tailscaleSignInEnabled && input.exposure.mode === "local-only";
   return {
     requestedMode: input.requestedMode,
     mode: input.exposure.mode,
     port: input.port,
-    bindHost: input.exposure.bindHost,
+    bindHost: tailscaleOnly ? DESKTOP_LAN_BIND_HOST : input.exposure.bindHost,
     localHttpUrl: input.exposure.localHttpUrl,
     localWsUrl: input.exposure.localWsUrl,
     httpBaseUrl: new URL(input.exposure.localHttpUrl),
@@ -363,6 +392,8 @@ function runtimeStateFromResolvedExposure(input: {
     advertisedHost: Option.fromNullishOr(input.exposure.advertisedHost),
     tailscaleServeEnabled: input.settings.tailscaleServeEnabled,
     tailscaleServePort: input.settings.tailscaleServePort,
+    tailscaleSignInEnabled: input.settings.tailscaleSignInEnabled,
+    tailscaleOnly,
   };
 }
 
@@ -431,7 +462,8 @@ export const tailscaleIpv4AddressKey = (
 const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
   previous.port !== next.port ||
   previous.bindHost !== next.bindHost ||
-  previous.localHttpUrl !== next.localHttpUrl;
+  previous.localHttpUrl !== next.localHttpUrl ||
+  previous.tailscaleOnly !== next.tailscaleOnly;
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -554,6 +586,33 @@ export const make = Effect.gen(function* () {
     changePermit.withPermit,
   );
 
+  const setTailscaleSignInEnabled = Effect.fn("desktop.serverExposure.setTailscaleSignInEnabled")(
+    function* (enabled: boolean) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      const previous = yield* Ref.get(stateRef);
+      const result = yield* desktopSettings
+        .setTailscaleSignIn(enabled)
+        .pipe(
+          Effect.mapError(
+            (cause) => new DesktopTailscaleSignInPersistenceError({ enabled, cause }),
+          ),
+        );
+      const resolved = resolveRuntimeState({
+        requestedMode: result.settings.serverExposureMode,
+        settings: result.settings,
+        port: previous.port,
+        networkInterfaces: yield* readNetworkInterfaces,
+        advertisedHostOverride: config.desktopLanHostOverride,
+      });
+      yield* Ref.set(stateRef, resolved.state);
+      return {
+        state: toContractState(resolved.state),
+        requiresRelaunch: result.changed,
+      };
+    },
+    changePermit.withPermit,
+  );
+
   const getAdvertisedEndpoints = Effect.gen(function* () {
     const state = yield* Ref.get(stateRef);
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
@@ -591,6 +650,7 @@ export const make = Effect.gen(function* () {
     configureFromSettings,
     setMode,
     setTailscaleServeEnabled,
+    setTailscaleSignInEnabled,
     getAdvertisedEndpoints,
   });
 });

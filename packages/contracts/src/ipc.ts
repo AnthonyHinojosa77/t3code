@@ -12,6 +12,7 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { TailscaleState } from "./server.ts";
+import type { TailnetPeerEnvironment } from "./tailnet.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -510,6 +511,8 @@ export interface DesktopServerExposureState {
   advertisedHost: string | null;
   tailscaleServeEnabled: boolean;
   tailscaleServePort: number;
+  tailscaleSignInEnabled?: boolean;
+  port?: number;
 }
 
 export const DesktopServerExposureStateSchema = Schema.Struct({
@@ -518,6 +521,10 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
   advertisedHost: Schema.NullOr(Schema.String),
   tailscaleServeEnabled: Schema.Boolean,
   tailscaleServePort: Schema.Number,
+  /** Your own Tailscale devices sign in with no code; the backend listens on the tailnet. */
+  tailscaleSignInEnabled: Schema.optionalKey(Schema.Boolean),
+  /** The backend's port. Other devices find this machine on 3773 only. */
+  port: Schema.optionalKey(Schema.Number),
 });
 
 export interface PickFolderOptions {
@@ -1093,6 +1100,9 @@ export interface DesktopBridge {
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   getTailscaleStatus: () => Promise<DesktopTailscaleStatus>;
+  setTailscaleSignInEnabled: (enabled: boolean) => Promise<DesktopServerExposureState>;
+  /** T3 Code machines on this device's tailnet, probed from the main process. */
+  discoverTailnetEnvironments: () => Promise<ReadonlyArray<TailnetPeerEnvironment>>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
