@@ -5,11 +5,13 @@ import {
 import type { RelayEnvironmentStatusResponse } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
 
-import type {
-  ConnectionAttemptError,
-  ConnectionFailureCause,
-  ConnectionHop,
-  SupervisorConnectionState,
+import {
+  type ConnectionAttemptError,
+  type ConnectionFailureCause,
+  type ConnectionHop,
+  type ConnectionRouteOutcome,
+  routeDidNotAnswer,
+  type SupervisorConnectionState,
 } from "./model.ts";
 
 export type ConnectionHopResult = "ok" | "failed" | "unchecked";
@@ -26,22 +28,55 @@ export interface ConnectionDiagnosis {
   readonly hops: ReadonlyArray<ConnectionDiagnosisHop>;
   readonly steps: ReadonlyArray<string>;
   readonly facts: ReadonlyArray<readonly [label: string, value: string]>;
-  /** The troubleshooting guide section for this failure. Null for direct routes. */
+  /** The troubleshooting guide section for this failure, when one exists. */
   readonly moreInfoUrl: string | null;
 }
+
+/** This device's own Tailscale state, when the platform can read it. */
+export type LocalTailscaleState = "running" | "stopped" | "needs-login" | "not-installed";
 
 export interface ConnectionDiagnosisInput {
   readonly hostLabel: string;
   readonly state: SupervisorConnectionState;
   /** The environment's usual route, used when the failure does not name one. */
   readonly via: "relay" | "direct";
-  /** The relay's last health check, which can name a cause before any connect attempt. */
+  /**
+   * The relay's last health check. For a relay-only environment it can name a
+   * cause before any connect attempt; with other routes it is one more fact.
+   */
   readonly relayStatus?: Pick<
     RelayEnvironmentStatusResponse,
     "status" | "endpointFailure" | "endpointStatus" | "offlineReason"
   > | null;
   readonly clientVersion?: string | undefined;
   readonly serverVersion?: string | null | undefined;
+  /** Turns the Tailscale hint into a verdict on platforms that can read it. */
+  readonly localTailscale?: LocalTailscaleState | null;
+}
+
+const TAILSCALE_TROUBLESHOOTING_URL =
+  "https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md#tailscale-troubleshooting";
+
+const OFF_TAILNET_HINT = "Check that Tailscale is on for this device.";
+
+/** Tailscale routes when every one of them failed to reach the host, else none. */
+function failedTailnetRoutes(
+  routes: ReadonlyArray<ConnectionRouteOutcome>,
+): ReadonlyArray<ConnectionRouteOutcome> {
+  const tailnet = routes.filter((route) => route.kind === "tailnet");
+  return tailnet.every(routeDidNotAnswer) ? tailnet : [];
+}
+
+/**
+ * A hint, not a verdict: every Tailscale route failed while another route
+ * answered or this device is online, so Tailscale may be off on this device.
+ */
+export function offTailnetHint(state: SupervisorConnectionState): string | null {
+  if (failedTailnetRoutes(state.routes).length === 0) return null;
+  const otherAnswered = state.routes.some(
+    (route) => route.kind !== "tailnet" && route.result === "answered",
+  );
+  return otherAnswered || state.network === "online" ? OFF_TAILNET_HINT : null;
 }
 
 interface Located {
@@ -73,7 +108,8 @@ function locate(input: ConnectionDiagnosisInput): Located | null {
     const via = failure.via ?? input.via;
     return { hop: unreachable && via === "relay" ? "tunnel" : "server", cause: null };
   }
-  const status = input.relayStatus;
+  // With other routes, the relay's health says nothing about the route in use.
+  const status = input.via === "relay" ? input.relayStatus : null;
   if (status?.status !== "offline") return null;
   if (status.offlineReason === "tunnel_released") return { hop: "tunnel", cause: "released" };
   const cause = status.endpointFailure ?? null;
@@ -279,6 +315,37 @@ function hopLabel(hop: ConnectionHop, host: string): string {
   }
 }
 
+function tailnetHeadline(input: ConnectionDiagnosisInput): string {
+  const host = input.hostLabel;
+  switch (input.localTailscale) {
+    case "stopped":
+      return "Tailscale is off on this device";
+    case "needs-login":
+      return "Tailscale on this device needs sign-in";
+    case "not-installed":
+      return "Tailscale is not installed on this device";
+    default:
+      return input.relayStatus?.status === "online"
+        ? `${host} is online on T3 Connect, but its Tailscale address did not answer`
+        : `${host} did not answer over Tailscale`;
+  }
+}
+
+function tailnetSteps(input: ConnectionDiagnosisInput): string[] {
+  const host = input.hostLabel;
+  const awake = `Make sure ${host} is awake and T3 Code is running on it.`;
+  switch (input.localTailscale) {
+    case "stopped":
+    case "needs-login":
+    case "not-installed":
+      return ["Turn on Tailscale on this device and sign in. T3 Code reconnects on its own."];
+    case "running":
+      return [`Check that Tailscale is on and signed in on ${host}.`, awake];
+    default:
+      return [`Check that Tailscale is on and signed in on this device and on ${host}.`, awake];
+  }
+}
+
 /**
  * Turns a connection state into what failed, in order, and what to try. Returns
  * null when nothing has failed. Web and mobile render this same model.
@@ -290,13 +357,22 @@ export function presentConnectionDiagnosis(
   if (located === null) return null;
   const host = input.hostLabel;
   const failure = input.state.lastFailure;
+  // A direct route that did not answer, where every Tailscale route also failed.
+  const tailnetRoutes =
+    located.hop === "server" &&
+    located.cause === null &&
+    failure?._tag === "ConnectionTransientError"
+      ? failedTailnetRoutes(input.state.routes)
+      : [];
+  const tailnet = tailnetRoutes.length > 0;
+  const tailscaleOff = tailnet && (input.localTailscale ?? "running") !== "running";
   const relayPath =
     located.hop === "relay" ||
     located.hop === "tunnel" ||
     (failure === null && input.relayStatus?.status === "offline") ||
     (failure?.via ?? input.via) === "relay";
   const order: ReadonlyArray<ConnectionHop> = HOP_ORDER[relayPath ? "relay" : "direct"];
-  const failedIndex = order.indexOf(located.hop);
+  const failedIndex = order.indexOf(tailscaleOff ? "device" : located.hop);
   const hops = order.map((hop, index): ConnectionDiagnosisHop => ({
     hop,
     label: hopLabel(hop, host),
@@ -319,17 +395,24 @@ export function presentConnectionDiagnosis(
       : DateTime.formatIso(DateTime.makeUnsafe(input.state.retryAt)),
   );
   add("Route", relayPath ? "T3 Connect" : "Direct");
+  for (const route of tailnetRoutes) add("Failed route", `Tailscale ${route.address ?? ""}`.trim());
+  if (tailnet) add("Tailscale on this device", input.localTailscale);
+  if (input.via !== "relay") add("T3 Connect", input.relayStatus?.status);
   add("App version", input.clientVersion);
   add("Host version", input.serverVersion);
   add("Error", failure?.detail);
   add("Trace ID", failure?.traceId);
 
   return {
-    headline: headline(host, located, failure),
+    headline: tailnet ? tailnetHeadline(input) : headline(host, located, failure),
     hops,
-    steps: steps(host, located, failure),
+    steps: tailnet ? tailnetSteps(input) : steps(host, located, failure),
     facts,
-    moreInfoUrl: relayPath ? t3ConnectTroubleshootingUrl(helpSection(located, failure)) : null,
+    moreInfoUrl: tailnet
+      ? TAILSCALE_TROUBLESHOOTING_URL
+      : relayPath
+        ? t3ConnectTroubleshootingUrl(helpSection(located, failure))
+        : null,
   };
 }
 

@@ -220,10 +220,14 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   const connect = Effect.fn("TestConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,
     reportProgress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
+    reportRoute: ConnectionDriver.ReportRouteOutcome,
   ) {
     yield* reportProgress({ stage: "preparing" });
-    return yield* ConnectionDriver.connectOverRoutes(entry, checkRoute, (route) =>
-      connectRoute(route.target, reportProgress),
+    return yield* ConnectionDriver.connectOverRoutes(
+      entry,
+      checkRoute,
+      (route) => connectRoute(route.target, reportProgress),
+      reportRoute,
     );
   });
 
@@ -1622,10 +1626,14 @@ describe("EnvironmentSupervisor routes", () => {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
-      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      const connected = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       const prepared = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared));
       expect(prepared.target._tag).toBe("RelayConnectionTarget");
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      expect(connected.routes.map((route) => [route.routeId, route.kind, route.result])).toEqual([
+        [LAN_TARGET.connectionId, "lan", "silent"],
+        ["relay", "relay", "answered"],
+      ]);
     }),
   );
 

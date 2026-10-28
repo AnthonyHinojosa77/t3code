@@ -2,6 +2,8 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
 import * as Schema from "effect/Schema";
 
+import type { ConnectionRouteKind } from "./routes.ts";
+
 const ConnectionTargetBase = {
   environmentId: EnvironmentId,
   label: Schema.String,
@@ -166,6 +168,27 @@ export type SupervisorConnectionPhase =
 
 export type ConnectionAttemptStage = "preparing" | "opening" | "synchronizing";
 
+/**
+ * What the latest attempt saw on one route: the host answered there, did not
+ * answer the reachability check, or the connection over it failed.
+ */
+export type ConnectionRouteOutcome = {
+  readonly routeId: string;
+  readonly kind: ConnectionRouteKind;
+  readonly address: string | null;
+} & (
+  | { readonly result: "answered" | "silent" }
+  | { readonly result: "failed"; readonly error: ConnectionAttemptError }
+);
+
+/** A route that gave no sign the host is there, as opposed to one that answered and refused. */
+export function routeDidNotAnswer(outcome: ConnectionRouteOutcome): boolean {
+  return (
+    outcome.result === "silent" ||
+    (outcome.result === "failed" && outcome.error._tag === "ConnectionTransientError")
+  );
+}
+
 export interface SupervisorConnectionState {
   readonly desired: boolean;
   readonly network: NetworkStatus;
@@ -175,6 +198,8 @@ export interface SupervisorConnectionState {
   readonly generation: number;
   readonly lastFailure: ConnectionAttemptError | null;
   readonly retryAt: number | null;
+  /** Each route's latest outcome. A route keeps it until an attempt reaches that route again. */
+  readonly routes: ReadonlyArray<ConnectionRouteOutcome>;
 }
 
 export type ConnectionProjectionPhase = "disconnected" | "synchronizing" | "ready";
@@ -204,4 +229,5 @@ export const AVAILABLE_CONNECTION_STATE: SupervisorConnectionState = Object.free
   generation: 0,
   lastFailure: null,
   retryAt: null,
+  routes: [],
 });

@@ -11,11 +11,20 @@ import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
 import type {
   ConnectionAttemptError,
   ConnectionAttemptStage,
+  ConnectionRouteOutcome,
   PreparedConnection,
 } from "./model.ts";
 import { ConnectionTransientError } from "./model.ts";
 import * as ConnectionResolver from "./resolver.ts";
-import { connectionRoutes, routeEntry, routeHttpBaseUrl, usableRoutes } from "./routes.ts";
+import {
+  connectionRouteAddress,
+  connectionRouteId,
+  connectionRouteKind,
+  connectionRoutes,
+  routeEntry,
+  routeHttpBaseUrl,
+  usableRoutes,
+} from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 
@@ -35,6 +44,8 @@ export interface EnvironmentConnectionLease {
 
 export type RouteCheck = "answered" | "silent" | "unchecked";
 
+export type ReportRouteOutcome = (outcome: ConnectionRouteOutcome) => Effect.Effect<void>;
+
 const ROUTE_CHECK_TIMEOUT_MS = 2_500;
 // Preferred direct routes share one head start, so a relay connection does not
 // wait the full probe timeout for a LAN the device has already left.
@@ -46,6 +57,7 @@ export class ConnectionDriver extends Context.Service<
     readonly connect: (
       entry: ConnectionCatalogEntry,
       reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+      reportRoute: ReportRouteOutcome,
     ) => Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, Scope.Scope>;
     /** Asks the host behind a live session to answer a fresh request on the session's own origin. */
     readonly checkHost: (prepared: PreparedConnection) => Effect.Effect<RouteCheck>;
@@ -58,12 +70,28 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   connectRoute: (
     route: ConnectionRoute,
   ) => Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, R | Scope.Scope>,
+  reportRoute: ReportRouteOutcome,
 ) {
   const routes = usableRoutes(entry);
+  const describe = (route: ConnectionRoute) => ({
+    routeId: connectionRouteId(route.target),
+    kind: connectionRouteKind(route),
+    address: connectionRouteAddress(route),
+  });
   const checks =
     routes.length === 1
       ? []
-      : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
+      : yield* Effect.forEach(routes, (route) =>
+          Effect.forkChild(
+            checkRoute(route).pipe(
+              Effect.tap((check) =>
+                check === "unchecked"
+                  ? Effect.void
+                  : reportRoute({ ...describe(route), result: check }),
+              ),
+            ),
+          ),
+        );
   const headStart = yield* Effect.forkChild(Effect.sleep(ROUTE_CHECK_HEAD_START_MS));
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
@@ -80,6 +108,11 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
       else blocked ??= result.failure;
     }
+    yield* reportRoute(
+      result._tag === "Success"
+        ? { ...describe(route), result: "answered" }
+        : { ...describe(route), result: "failed", error: result.failure },
+    );
     return result;
   });
   const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
@@ -166,6 +199,7 @@ export const make = Effect.gen(function* () {
   const connect = Effect.fn("ConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,
     reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+    reportRoute: ReportRouteOutcome,
   ) {
     const target = entry.target;
     yield* Effect.annotateCurrentSpan({
@@ -185,6 +219,7 @@ export const make = Effect.gen(function* () {
         yield* session.ready;
         return { prepared, session } satisfies EnvironmentConnectionLease;
       }),
+      reportRoute,
     );
   });
 

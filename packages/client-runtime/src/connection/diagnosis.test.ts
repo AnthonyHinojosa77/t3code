@@ -4,11 +4,13 @@ import {
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 
-import { presentConnectionDiagnosis } from "./diagnosis.ts";
+import { offTailnetHint, presentConnectionDiagnosis } from "./diagnosis.ts";
 import { mapManagedRelayError, mapRemoteEnvironmentError } from "./errors.ts";
 import {
   AVAILABLE_CONNECTION_STATE,
   type ConnectionAttemptError,
+  type ConnectionRouteOutcome,
+  ConnectionTransientError,
   type SupervisorConnectionState,
 } from "./model.ts";
 import { ManagedRelayRequestFailedError } from "../relay/managedRelay.ts";
@@ -43,6 +45,24 @@ const unavailable = (endpointFailure: "tunnel_down" | "origin_unreachable") =>
       traceId: "trace-1",
     }),
   );
+
+const tailnetTimeout = new ConnectionTransientError({
+  reason: "timeout",
+  detail: "Mac mini did not respond during connection setup.",
+});
+const TAILNET_FAILED: ConnectionRouteOutcome = {
+  routeId: "bearer:tailnet",
+  kind: "tailnet",
+  address: "http://100.64.0.1:3773/",
+  result: "failed",
+  error: tailnetTimeout,
+};
+const RELAY_ANSWERED: ConnectionRouteOutcome = {
+  routeId: "relay",
+  kind: "relay",
+  address: null,
+  result: "answered",
+};
 
 const diagnose = (state: SupervisorConnectionState, via: "relay" | "direct" = "relay") =>
   presentConnectionDiagnosis({ hostLabel: "Mac mini", state, via });
@@ -122,10 +142,74 @@ describe("presentConnectionDiagnosis", () => {
     const origin = presentConnectionDiagnosis({
       hostLabel: "Mac mini",
       state: AVAILABLE_CONNECTION_STATE,
-      via: "direct",
+      via: "relay",
       relayStatus: { status: "offline", endpointFailure: "origin_unreachable" },
     });
     expect(origin?.hops.map((hop) => hop.hop)).toEqual(["device", "relay", "tunnel", "server"]);
+    // Another route may still work, so the relay's health alone is no failure.
+    const withDirectRoute = presentConnectionDiagnosis({
+      hostLabel: "Mac mini",
+      state: AVAILABLE_CONNECTION_STATE,
+      via: "direct",
+      relayStatus: { status: "offline", endpointFailure: "origin_unreachable" },
+    });
+    expect(withDirectRoute).toBeNull();
+  });
+
+  it("names a Tailscale route that did not answer and keeps the relay status", () => {
+    const state = { ...backoff(tailnetTimeout), routes: [TAILNET_FAILED] };
+    const plain = diagnose(state, "direct");
+    expect(plain?.headline).toBe("Mac mini did not answer over Tailscale");
+    expect(plain?.steps[0]).toBe(
+      "Check that Tailscale is on and signed in on this device and on Mac mini.",
+    );
+    expect(plain?.facts).toContainEqual(["Failed route", "Tailscale http://100.64.0.1:3773/"]);
+    expect(plain?.moreInfoUrl).toMatch(/remote-access\.md#tailscale-troubleshooting$/);
+
+    const relayOnline = presentConnectionDiagnosis({
+      hostLabel: "Mac mini",
+      state,
+      via: "direct",
+      relayStatus: { status: "online" },
+    });
+    expect(relayOnline?.headline).toBe(
+      "Mac mini is online on T3 Connect, but its Tailscale address did not answer",
+    );
+    expect(relayOnline?.facts).toContainEqual(["T3 Connect", "online"]);
+
+    const tailscaleOff = presentConnectionDiagnosis({
+      hostLabel: "Mac mini",
+      state,
+      via: "direct",
+      localTailscale: "stopped",
+    });
+    expect(tailscaleOff?.headline).toBe("Tailscale is off on this device");
+    expect(tailscaleOff?.hops.map((hop) => `${hop.hop}:${hop.result}`)).toEqual([
+      "device:failed",
+      "server:unchecked",
+    ]);
+
+    // A Tailscale route that answered leaves the generic diagnosis.
+    const answered = { ...TAILNET_FAILED, result: "answered" } as const;
+    expect(diagnose({ ...state, routes: [answered] }, "direct")?.headline).toBe(
+      "T3 Code on Mac mini did not answer",
+    );
+  });
+});
+
+describe("offTailnetHint", () => {
+  it("hints only when every Tailscale route failed and something else works", () => {
+    const connected: SupervisorConnectionState = {
+      ...AVAILABLE_CONNECTION_STATE,
+      desired: true,
+      phase: "connected",
+      routes: [TAILNET_FAILED, RELAY_ANSWERED],
+    };
+    expect(offTailnetHint(connected)).toBe("Check that Tailscale is on for this device.");
+    const offline = { ...connected, network: "offline" as const, routes: [TAILNET_FAILED] };
+    expect(offTailnetHint(offline)).toBeNull();
+    expect(offTailnetHint({ ...offline, network: "online" })).not.toBeNull();
+    expect(offTailnetHint({ ...connected, routes: [RELAY_ANSWERED] })).toBeNull();
   });
 
   it("keeps the relay health status out of a failure that has its own cause", () => {

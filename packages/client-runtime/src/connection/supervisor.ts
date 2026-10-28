@@ -20,6 +20,7 @@ import * as Connectivity from "./connectivity.ts";
 import * as ConnectionDriver from "./driver.ts";
 import {
   type ConnectionAttemptError,
+  type ConnectionRouteOutcome,
   type ConnectionTarget,
   ConnectionTransientError,
   type NetworkStatus,
@@ -141,7 +142,10 @@ function annotateTarget(target: ConnectionTarget) {
   });
 }
 
-function availableState(intent: SupervisorIntent, generation: number): SupervisorConnectionState {
+/** The supervisor adds route outcomes as it publishes a state. */
+type PhaseState = Omit<SupervisorConnectionState, "routes">;
+
+function availableState(intent: SupervisorIntent, generation: number): PhaseState {
   return {
     desired: false,
     network: intent.network,
@@ -159,7 +163,7 @@ function offlineState(
   generation: number,
   attempt: number,
   lastFailure: ConnectionAttemptError | null,
-): SupervisorConnectionState {
+): PhaseState {
   return {
     desired: true,
     network: intent.network,
@@ -178,7 +182,7 @@ function connectingState(
   attempt: number,
   lastFailure: ConnectionAttemptError | null,
   stage: SupervisorConnectionState["stage"] = "preparing",
-): SupervisorConnectionState {
+): PhaseState {
   return {
     desired: true,
     network: intent.network,
@@ -267,13 +271,15 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const signals = yield* Queue.unbounded<SupervisorSignal>();
   const resetRetryState = yield* Ref.make(false);
   const probeUnanswered = yield* Ref.make(false);
-  const state = yield* SubscriptionRef.make<SupervisorConnectionState>(
-    !initialIntent.desired
+  const state = yield* SubscriptionRef.make<SupervisorConnectionState>({
+    ...(!initialIntent.desired
       ? availableState(initialIntent, 0)
       : initialIntent.network === "offline"
         ? offlineState(initialIntent, 0, 0, null)
-        : connectingState(initialIntent, 0, 1, null),
-  );
+        : connectingState(initialIntent, 0, 1, null)),
+    routes: [],
+  });
+  const routeOutcomes = yield* Ref.make<ReadonlyMap<string, ConnectionRouteOutcome>>(new Map());
   const session = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(Option.none());
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
   // Learned routes arrive while a session is live, so the route list is read
@@ -303,10 +309,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     { discard: true },
   );
 
-  const setState = Effect.fn("EnvironmentSupervisor.setState")(function* (
-    next: SupervisorConnectionState,
+  const setState = Effect.fn("EnvironmentSupervisor.setState")(function* (next: PhaseState) {
+    const routes = next.desired ? [...(yield* Ref.get(routeOutcomes)).values()] : [];
+    if (!next.desired) yield* Ref.set(routeOutcomes, new Map());
+    yield* SubscriptionRef.set(state, { ...next, routes });
+  });
+
+  const recordRoute = Effect.fn("EnvironmentSupervisor.recordRoute")(function* (
+    outcome: ConnectionRouteOutcome,
   ) {
-    yield* SubscriptionRef.set(state, next);
+    const outcomes = yield* Ref.updateAndGet(routeOutcomes, (current) =>
+      new Map(current).set(outcome.routeId, outcome),
+    );
+    yield* SubscriptionRef.update(state, (current) => ({
+      ...current,
+      routes: [...outcomes.values()],
+    }));
   });
 
   const signal = Effect.fn("EnvironmentSupervisor.signal")(function* (next: SupervisorSignal) {
@@ -342,11 +360,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lastFailure: ConnectionAttemptError | null,
     synchronizedRoutes: Ref.Ref<number>,
   ) {
-    return yield* driver.connect(yield* Ref.get(currentEntry), (progress) =>
-      (progress.stage === "synchronizing"
-        ? Ref.update(synchronizedRoutes, (count) => count + 1)
-        : Effect.void
-      ).pipe(Effect.andThen(reportProgress(attempt, generation, lastFailure, progress))),
+    return yield* driver.connect(
+      yield* Ref.get(currentEntry),
+      (progress) =>
+        (progress.stage === "synchronizing"
+          ? Ref.update(synchronizedRoutes, (count) => count + 1)
+          : Effect.void
+        ).pipe(Effect.andThen(reportProgress(attempt, generation, lastFailure, progress))),
+      recordRoute,
     );
   });
 
