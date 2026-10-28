@@ -209,6 +209,13 @@ interface EnvironmentServiceScope {
   readonly scope: Scope.Closeable;
 }
 
+const authorizationOf = (route: ConnectionRoute) =>
+  Option.match(route.profile, {
+    onNone: () => undefined,
+    onSome: (profile) =>
+      profile._tag === "BearerConnectionProfile" ? profile.authorization : undefined,
+  });
+
 /** @public */
 export const make = Effect.gen(function* () {
   const registryScope = yield* Scope.Scope;
@@ -594,20 +601,29 @@ export const make = Effect.gen(function* () {
           const existing = connectionRoutes(previous);
           const sameAddress = findRouteToSameAddress(existing, route);
           const id = connectionRouteId(route.target);
-          // Registering replaces the route at the same address and the credential it held.
-          const replacedIds = new Set([
-            id,
-            ...(sameAddress === undefined ? [] : [connectionRouteId(sameAddress.target)]),
-          ]);
+          const replacedId =
+            sameAddress !== undefined && connectionRouteId(sameAddress.target) !== id
+              ? connectionRouteId(sameAddress.target)
+              : undefined;
+          // Learned routes borrow a credential. Drop them when it is deleted, or
+          // when its kind changes (a pairing replacing a Tailscale sign-in); the
+          // saved credential decides, since an upgraded LAN route keeps a LAN profile.
+          const registeredAuthorization =
+            registration._tag === "TailnetConnectionRegistration"
+              ? "tailnet"
+              : authorizationOf(route);
+          const dropsLearned = (candidate: ConnectionRoute) => {
+            if (!isLearned(candidate)) return false;
+            const borrowed = credentialConnectionId(connectionRouteId(candidate.target));
+            return (
+              borrowed === replacedId ||
+              (borrowed === id && authorizationOf(candidate) !== registeredAuthorization)
+            );
+          };
           const routes = existing.filter(
             (existing) =>
               (existing !== sameAddress || connectionRouteId(existing.target) === id) &&
-              // Routes learned over the old credential may carry its Tailscale
-              // sign-in; the next connect learns them again with the new one.
-              !(
-                isLearned(existing) &&
-                replacedIds.has(credentialConnectionId(connectionRouteId(existing.target)))
-              ),
+              !dropsLearned(existing),
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
           if (next.addressesChanged) {
