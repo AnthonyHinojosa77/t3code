@@ -67,6 +67,12 @@ function failedTailnetRoutes(
   return tailnet.every(routeDidNotAnswer) ? tailnet : [];
 }
 
+/** The latest outcome on one route, for a route list. */
+export function routeOutcomeText(outcome: ConnectionRouteOutcome): string {
+  if (outcome.result === "answered") return "Answered";
+  return routeDidNotAnswer(outcome) ? "Did not answer" : "Failed";
+}
+
 /**
  * A hint, not a verdict: every Tailscale route failed while another route
  * answered or this device is online, so Tailscale may be off on this device.

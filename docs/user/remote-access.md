@@ -113,8 +113,8 @@ stays on its route, even when an earlier route comes back. The route order
 applies the next time T3 Code has to reconnect.
 
 On web and desktop, select the route count under the machine's name in
-**Settings → Environments** to see its routes. Drag a route to change the order,
-or remove it. On mobile, open the machine under **Settings → Environments** and
+**Settings → Environments** to see its routes. Each route shows whether it
+answered on the last try. Drag a route to change the order, or remove it. On mobile, open the machine under **Settings → Environments** and
 choose **Edit**. Signing out of T3 Connect removes only that route; a machine
 you can still reach another way stays saved.
 

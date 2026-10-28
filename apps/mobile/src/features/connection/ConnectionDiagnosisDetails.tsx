@@ -10,6 +10,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import Constants from "expo-constants";
+import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import { Linking, View } from "react-native";
 
@@ -18,6 +19,7 @@ import { Button } from "../../components/ui/Button";
 import { environmentCatalog } from "../../connection/catalog";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { relayEnvironmentDiscovery } from "../../state/relay";
 
 const HOP_MARK = { ok: "✓", failed: "✕", unchecked: "–" } as const;
 const HOP_NOTE = { ok: "", failed: " · Failed", unchecked: " · Not checked" } as const;
@@ -31,6 +33,9 @@ export function useConnectionDiagnosis(
     useAtomValue(environmentCatalog.stateAtom(environmentId)),
     () => AVAILABLE_CONNECTION_STATE,
   );
+  const relayStatus = useAtomValue(relayEnvironmentDiscovery.stateValueAtom).environments.get(
+    environmentId,
+  )?.status;
   if (presentation === null || !presentation.entry.enabled) return { diagnosis: null, state };
   const phase = presentation.connection.phase;
   if (phase === "connected" || phase === "unsupported") return { diagnosis: null, state };
@@ -40,6 +45,9 @@ export function useConnectionDiagnosis(
     hostLabel: presentation.entry.target.label,
     state,
     via: relayOnly ? "relay" : "direct",
+    relayStatus: hasRelayRoute(presentation.entry)
+      ? Option.getOrNull(relayStatus ?? Option.none())
+      : null,
     clientVersion: Constants.expoConfig?.version,
     serverVersion: presentation.serverConfig?.environment.serverVersion,
   });
