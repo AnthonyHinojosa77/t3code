@@ -445,6 +445,7 @@ describe("ConnectionResolver", () => {
         hop: "server",
       });
       const paired = bearerRoute("paired", "http://100.88.1.2:3773/");
+      const ticketRequests = yield* Ref.make(0);
       const dependencies = (surface: "web" | "mobile") =>
         makeDependencies({
           credentials: [["paired", new BearerConnectionCredential({ token: "expired" })]],
@@ -453,18 +454,29 @@ describe("ConnectionResolver", () => {
           authorizeBearer: () => Effect.fail(ended),
           signInTailnet: () => Effect.succeed(TAILNET_SESSION),
           authorizeTailnet: (input) =>
-            Effect.succeed({
-              environmentId: input.expectedEnvironmentId,
-              label: "Studio",
-              httpBaseUrl: input.endpoint.httpBaseUrl,
-              socketUrl: "ws://100.88.1.2:3773/ws",
-              httpAuthorization: {
-                _tag: "Dpop" as const,
-                accessToken: TAILNET_SESSION.accessToken,
-                expiresAtEpochMs: TAILNET_SESSION.expiresAtEpochMs,
-                tailnetCredentialId: input.credentialId,
-              },
-            }),
+            Ref.updateAndGet(ticketRequests, (count) => count + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 1
+                  ? Effect.fail(
+                      new ConnectionTransientError({
+                        reason: "network",
+                        detail: "The ticket request failed.",
+                      }),
+                    )
+                  : Effect.succeed({
+                      environmentId: input.expectedEnvironmentId,
+                      label: "Studio",
+                      httpBaseUrl: input.endpoint.httpBaseUrl,
+                      socketUrl: "ws://100.88.1.2:3773/ws",
+                      httpAuthorization: {
+                        _tag: "Dpop" as const,
+                        accessToken: TAILNET_SESSION.accessToken,
+                        expiresAtEpochMs: TAILNET_SESSION.expiresAtEpochMs,
+                        tailnetCredentialId: input.credentialId,
+                      },
+                    }),
+              ),
+            ),
         });
 
       // Browsers cannot sign in through Tailscale, so the old session's error stands.
@@ -476,6 +488,10 @@ describe("ConnectionResolver", () => {
       const layerMobile = yield* dependencies("mobile");
       const { prepared, profile, credential } = yield* Effect.gen(function* () {
         const broker = yield* ConnectionResolver.ConnectionResolver;
+        // The first connect after sign-in fails, and the retry still holds the old profile.
+        expect(yield* Effect.flip(broker.prepare(paired.entry))).toMatchObject({
+          _tag: "ConnectionTransientError",
+        });
         const prepared = yield* broker.prepare(paired.entry);
         const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
         const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
@@ -493,6 +509,75 @@ describe("ConnectionResolver", () => {
         authorization: "tailnet",
         network: "tailscale",
       });
+    }),
+  );
+
+  it.effect("switches a Serve pairing to Tailscale sign-in at its direct Tailscale route", () =>
+    Effect.gen(function* () {
+      const ended = new ConnectionBlockedError({
+        reason: "authentication",
+        detail: "The environment credential is invalid.",
+        hop: "server",
+      });
+      const signIns = yield* Ref.make<ReadonlyArray<string>>([]);
+      const authorized = yield* Ref.make<ReadonlyArray<readonly [string, string]>>([]);
+      const serve = bearerRoute("serve", "https://studio.tail1234.ts.net/");
+      const direct = bearerRoute(
+        `learned:${ENVIRONMENT_ID}:http://100.88.1.2:3773@serve`,
+        "http://100.88.1.2:3773/",
+        { learned: true, network: "tailscale" },
+      );
+      const lan = bearerRoute(
+        `learned:${ENVIRONMENT_ID}:http://192.168.1.10:3773@serve`,
+        "http://192.168.1.10:3773/",
+        { learned: true },
+      );
+      const layer = yield* makeDependencies({
+        credentials: [["serve", new BearerConnectionCredential({ token: "expired" })]],
+        surface: "mobile",
+        tailnetSignIn: true,
+        authorizeBearer: () => Effect.fail(ended),
+        signInTailnet: (input) =>
+          Ref.update(signIns, (urls) => [...urls, input.httpBaseUrl]).pipe(
+            Effect.as(TAILNET_SESSION),
+          ),
+        authorizeTailnet: (input) =>
+          Ref.update(authorized, (calls) => [
+            ...calls,
+            [input.credentialId, input.endpoint.httpBaseUrl] as const,
+          ]).pipe(
+            Effect.as({
+              environmentId: input.expectedEnvironmentId,
+              label: "Studio",
+              httpBaseUrl: input.endpoint.httpBaseUrl,
+              socketUrl: "ws://studio/ws",
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: TAILNET_SESSION.accessToken,
+                expiresAtEpochMs: TAILNET_SESSION.expiresAtEpochMs,
+                tailnetCredentialId: input.credentialId,
+              },
+            }),
+          ),
+      });
+
+      const credential = yield* Effect.gen(function* () {
+        const broker = yield* ConnectionResolver.ConnectionResolver;
+        // Serve and LAN routes hide who the device is, so neither signs in.
+        expect(yield* Effect.flip(broker.prepare(serve.entry))).toBe(ended);
+        expect(yield* Effect.flip(broker.prepare(lan.entry))).toBe(ended);
+        yield* broker.prepare(direct.entry);
+        yield* broker.prepare(serve.entry);
+        const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
+        return yield* credentials.get("serve");
+      }).pipe(Effect.provide(layer));
+
+      expect(yield* Ref.get(signIns)).toEqual(["http://100.88.1.2:3773/"]);
+      expect(Option.getOrThrow(credential)).toBe(TAILNET_SESSION);
+      expect(yield* Ref.get(authorized)).toEqual([
+        ["serve", "http://100.88.1.2:3773/"],
+        ["serve", "https://studio.tail1234.ts.net/"],
+      ]);
     }),
   );
 });
