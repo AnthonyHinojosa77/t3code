@@ -1543,6 +1543,19 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
           isSearchTarget={index === 0}
         />
       ))}
+      {savedEnvironments
+        .filter(
+          (environment) =>
+            environment.connection.phase === "connected" &&
+            environment.serverConfig?.environment.capabilities.tailnetSignIn === true,
+        )
+        .map((environment) => (
+          <TailnetDevicesSettings
+            key={environment.environmentId}
+            environmentId={environment.environmentId}
+            environmentLabel={environment.label}
+          />
+        ))}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
       <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>

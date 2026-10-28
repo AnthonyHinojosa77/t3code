@@ -21,13 +21,16 @@ const failureMessage = (result: Parameters<typeof squashAtomCommandFailure>[0]) 
 };
 
 /**
- * Devices that signed in to this host through Tailscale. Block ends a device's
- * sessions here and refuses its sign-in until Unblock.
+ * Devices that signed in to a host through Tailscale. Block ends a device's
+ * sessions there and refuses its sign-in until Unblock. A saved environment
+ * passes its label; the primary environment's section has none.
  */
 export function TailnetDevicesSettings({
   environmentId,
+  environmentLabel,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly environmentLabel?: string;
 }) {
   const canManage = useAtomValue(tailnetEnvironment.blockDevice.permissionAtom(environmentId));
   const listed = useEnvironmentQuery(
@@ -44,7 +47,7 @@ export function TailnetDevicesSettings({
     const name = device.label ?? device.stableNodeId;
     if (device.blockedAt === null) {
       const confirmed = await requestConfirmDialog(
-        `Block ${name}?\nIts sessions here end now, and it cannot sign in through Tailscale until you unblock it. A device that rejoins Tailscale gets a new ID, so block it again or remove it from your tailnet.`,
+        `Block ${name}?\nIts sessions ${environmentLabel === undefined ? "here" : `on ${environmentLabel}`} end now, and it cannot sign in through Tailscale until you unblock it. A device that rejoins Tailscale gets a new ID, so block it again or remove it from your tailnet.`,
         { variant: "destructive" },
       );
       if (confirmed !== true) return;
@@ -65,7 +68,14 @@ export function TailnetDevicesSettings({
   };
 
   return (
-    <SettingsSection id="tailscale-devices" title="Tailscale devices">
+    <SettingsSection
+      {...(environmentLabel === undefined ? { id: "tailscale-devices" } : {})}
+      title={
+        environmentLabel === undefined
+          ? "Tailscale devices"
+          : `Tailscale devices on ${environmentLabel}`
+      }
+    >
       {listed.error !== null ? (
         <SettingsRow title="Could not load Tailscale devices" description={listed.error} />
       ) : devices === null ? (

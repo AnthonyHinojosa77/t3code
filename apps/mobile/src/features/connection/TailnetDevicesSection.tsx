@@ -27,6 +27,8 @@ const failureMessage = (result: Parameters<typeof squashAtomCommandFailure>[0]) 
 export function TailnetDevicesSection(props: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
+  /** Outer spacing. Defaults to the environment list's. */
+  readonly className?: string;
 }) {
   const config = useEnvironmentServerConfig(props.environmentId);
   const offered = config?.environment.capabilities.tailnetSignIn === true;
@@ -77,7 +79,7 @@ export function TailnetDevicesSection(props: {
   };
 
   return (
-    <View className="mt-5 gap-3">
+    <View className={props.className ?? "mt-5 gap-3"}>
       <SettingsSection title={`Tailscale devices on ${props.environmentLabel}`}>
         {devices.map((device) => (
           <ListActionRow
