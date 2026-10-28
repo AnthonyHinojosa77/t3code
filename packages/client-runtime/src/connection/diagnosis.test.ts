@@ -20,6 +20,7 @@ import {
   ConnectionTransientError,
   type SupervisorConnectionState,
 } from "./model.ts";
+import { tailnetRefusalError } from "./tailnet.ts";
 import { ManagedRelayRequestFailedError } from "../relay/managedRelay.ts";
 import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 
@@ -201,6 +202,21 @@ describe("presentConnectionDiagnosis", () => {
     expect(diagnose({ ...state, routes: [answered] }, "direct")?.headline).toBe(
       "T3 Code on Mac mini did not answer",
     );
+  });
+
+  it("names the check a host's Tailscale sign-in refused instead of guessing", () => {
+    const refused = (reason: "blocked" | "rate_limited") => {
+      const error = tailnetRefusalError(reason);
+      return diagnose({ ...backoff(error), routes: [{ ...TAILNET_FAILED, error }] }, "direct");
+    };
+    expect(refused("blocked")).toMatchObject({
+      headline: "Mac mini blocked this device",
+      steps: ["On Mac mini, open Settings > Sharing & access and unblock this device."],
+      moreInfoUrl: expect.stringMatching(/#tailscale-troubleshooting$/),
+    });
+    expect(refused("blocked")?.facts).toContainEqual(["Cause", "blocked"]);
+    // A transient refusal answered, so it is not an unreachable tailnet.
+    expect(refused("rate_limited")?.headline).toBe("Mac mini asked this device to slow down");
   });
 });
 

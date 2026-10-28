@@ -16,11 +16,13 @@ import * as RpcHttp from "../rpc/http.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { fetchRemoteSessionState } from "../authorization/remote.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
   PrimaryConnectionRegistration,
+  TailnetConnectionCredential,
 } from "./catalog.ts";
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -35,11 +37,19 @@ import {
   prepareBearerConnectionUpdate,
   preparePairingRegistration,
   prepareSshRegistration,
+  prepareTailnetRegistration,
 } from "./onboarding.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+
+const TAILNET_SESSION = new TailnetConnectionCredential({
+  signInBaseUrl: "http://100.88.1.2:3773/",
+  accessToken: "tailnet-access-token",
+  expiresAtEpochMs: 3_600_000,
+  dpopThumbprint: "thumbprint-1",
+});
 
 const layerClientPresentation = Layer.succeed(
   ClientCapabilities.ClientPresentation,
@@ -59,6 +69,7 @@ function layerPairingHttp(
     readonly failExchange?: boolean;
     readonly protocolVersion?: number;
     readonly selfUpdate?: boolean;
+    readonly tailnetSignIn?: boolean;
     readonly grantScopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly exchangeGate?: { readonly reached: () => void; readonly release: Promise<void> };
   },
@@ -88,6 +99,7 @@ function layerPairingHttp(
           capabilities: {
             repositoryIdentity: true,
             ...(options?.selfUpdate === true ? { serverSelfUpdate: "boot-service" } : {}),
+            ...(options?.tailnetSignIn === true ? { tailnetSignIn: true } : {}),
           },
         }),
       );
@@ -169,6 +181,7 @@ function layerPairingOnboarding(
     Layer.mock(Persistence.ConnectionTargetStore)({
       list: Effect.succeed([]),
       listDisabled: Effect.succeed([]),
+      listDismissed: Effect.succeed([]),
     }),
     Layer.mock(Persistence.ConnectionRegistrationStore)({
       register: () => Effect.void,
@@ -193,6 +206,11 @@ function layerPairingOnboarding(
   );
   return Onboarding.layer.pipe(
     Layer.provideMerge(EnvironmentRegistry.layer.pipe(Layer.provideMerge(dependencies))),
+    Layer.provideMerge(
+      Layer.mock(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization)({
+        signInTailnet: () => Effect.succeed(TAILNET_SESSION),
+      }),
+    ),
   );
 }
 
@@ -277,6 +295,37 @@ describe("connection onboarding", () => {
       expect(tokenParams.get("client_label")).toBe("T3 Code Test");
       expect(tokenParams.get("client_device_type")).toBe("desktop");
       expect(tokenParams.get("client_os")).toBe("Test OS");
+    }),
+  );
+
+  it.effect("signs in with no code only when the machine offers Tailscale sign-in", () =>
+    Effect.gen(function* () {
+      const prepare = (tailnetSignIn: boolean) => {
+        const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+        return prepareTailnetRegistration({ httpBaseUrl: "http://100.88.1.2:3773/" }).pipe(
+          Effect.provide(layerPairingOnboarding({ tailnetSignIn }, calls)),
+          Effect.map((registration) => ({ registration, calls })),
+        );
+      };
+
+      const pairing = yield* prepare(false);
+      expect(pairing.registration).toEqual(Option.none());
+      expect(pairing.calls.map((call) => new URL(call.url).pathname)).toEqual([
+        "/.well-known/t3/environment",
+      ]);
+
+      const signedIn = yield* prepare(true);
+      expect(Option.getOrThrow(signedIn.registration)).toMatchObject({
+        _tag: "TailnetConnectionRegistration",
+        target: { connectionId: "tailnet:environment-paired:http://100.88.1.2:3773" },
+        profile: {
+          httpBaseUrl: "http://100.88.1.2:3773/",
+          wsBaseUrl: "ws://100.88.1.2:3773/",
+          authorization: "tailnet",
+          network: "tailscale",
+        },
+        credential: TAILNET_SESSION,
+      });
     }),
   );
 

@@ -204,6 +204,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   const targetStore = Persistence.ConnectionTargetStore.of({
     list: Ref.get(storedTargets),
     listDisabled: Ref.get(storedDisabled).pipe(Effect.map((ids) => [...ids])),
+    listDismissed: Effect.succeed([]),
   });
   const registrationStore = Persistence.ConnectionRegistrationStore.of({
     register: (registration, routes) =>
@@ -386,9 +387,10 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
         ...PREPARED,
         environmentId: target.environmentId,
         label: target.label,
-        httpAuthorization: Option.isSome(credential)
-          ? { _tag: "Bearer", token: credential.value.token }
-          : null,
+        httpAuthorization:
+          Option.isSome(credential) && credential.value._tag === "BearerConnectionCredential"
+            ? { _tag: "Bearer", token: credential.value.token }
+            : null,
         target,
       };
       if (options?.prepareError) return yield* options.prepareError;
@@ -1394,11 +1396,13 @@ describe("EnvironmentRegistry", () => {
             ? // @effect-diagnostics-next-line effectSucceedWithVoid:off - Admission checks return an optional blocker, so absence must be undefined.
               Effect.succeed(undefined)
             : Ref.get(storedCredentials).pipe(
-                Effect.map((current) =>
-                  current.get(target.connectionId)?.token === "old-bearer"
+                Effect.map((current) => {
+                  const credential = current.get(target.connectionId);
+                  return credential?._tag === "BearerConnectionCredential" &&
+                    credential.token === "old-bearer"
                     ? new ConnectionBlockedError({ reason: "authentication", detail: "revoked" })
-                    : undefined,
-                ),
+                    : undefined;
+                }),
               ),
       });
       storedCredentials = harness.storedCredentials;

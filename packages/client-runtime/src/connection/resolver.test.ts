@@ -14,13 +14,17 @@ import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   BearerConnectionCredential,
+  BearerConnectionProfile,
   type ConnectionCatalogEntry,
   SshConnectionProfile,
+  TailnetConnectionCredential,
   type ConnectionCredential,
   type ConnectionProfile,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import {
+  BearerConnectionTarget,
+  ConnectionBlockedError,
   ConnectionTransientError,
   PrimaryConnectionTarget,
   SshConnectionTarget,
@@ -39,6 +43,34 @@ const ENDPOINT = {
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
 };
+const TAILNET_SESSION = new TailnetConnectionCredential({
+  signInBaseUrl: "http://100.88.1.2:3773/",
+  accessToken: "tailnet-access-token",
+  expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+  dpopThumbprint: "thumbprint-1",
+});
+
+function bearerRoute(
+  connectionId: string,
+  httpBaseUrl: string,
+  extra: Partial<Pick<BearerConnectionProfile, "learned" | "authorization" | "network">> = {},
+) {
+  const target = new BearerConnectionTarget({
+    environmentId: ENVIRONMENT_ID,
+    label: "Studio",
+    connectionId,
+  });
+  const profile = new BearerConnectionProfile({
+    connectionId,
+    environmentId: ENVIRONMENT_ID,
+    label: "Studio",
+    httpBaseUrl,
+    wsBaseUrl: httpBaseUrl.replace(/^http/, "ws"),
+    ...extra,
+  });
+  return { target, profile, entry: catalogEntry(target, Option.some(profile)) };
+}
+
 const SSH_TARGET: DesktopSshEnvironmentTarget = {
   alias: "development",
   hostname: "development.example.test",
@@ -59,9 +91,13 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly credentials?: ReadonlyArray<readonly [string, ConnectionCredential]>;
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
+  readonly signInTailnet?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["signInTailnet"];
+  readonly authorizeTailnet?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeTailnet"];
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly tailnetSignIn?: boolean;
+  readonly surface?: "web" | "desktop" | "mobile";
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -108,6 +144,9 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
           },
         })),
     authorizeDpopHttp: () => Effect.die("unused"),
+    signInTailnet: options?.signInTailnet ?? (() => Effect.die("unused")),
+    authorizeTailnet: options?.authorizeTailnet ?? (() => Effect.die("unused")),
+    authorizeTailnetHttp: () => Effect.die("unused"),
   });
   const ssh = ClientCapabilities.SshEnvironmentGateway.of({
     provision: () => Effect.die("unused"),
@@ -139,7 +178,10 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
             : options.descriptorProtocolVersion === null
               ? {}
               : { orchestrationProtocolVersion: options.descriptorProtocolVersion }),
-          capabilities: { repositoryIdentity: true },
+          capabilities: {
+            repositoryIdentity: true,
+            ...(options?.tailnetSignIn === true ? { tailnetSignIn: true } : {}),
+          },
         }),
       )) satisfies typeof fetch),
     Layer.succeed(
@@ -156,14 +198,19 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     Layer.succeed(
       ClientCapabilities.ClientPresentation,
       ClientCapabilities.ClientPresentation.of({
-        metadata: { label: "Test Client", deviceType: "desktop", surface: "web" },
+        metadata: {
+          label: "Test Client",
+          deviceType: "desktop",
+          surface: options?.surface ?? "web",
+        },
       }),
     ),
     Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, remote),
     Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
   );
 
-  return Effect.succeed(ConnectionResolver.layer.pipe(Layer.provide(layerDependencies)));
+  // Merged so a test can read back what the resolver stored.
+  return Effect.succeed(ConnectionResolver.layer.pipe(Layer.provideMerge(layerDependencies)));
 });
 
 describe("ConnectionResolver", () => {
@@ -344,5 +391,108 @@ describe("ConnectionResolver", () => {
         }
         expect(yield* permissions.get(entry)).toBe(scenario === "changed" ? "off" : "read-write");
       }),
+  );
+  it.effect("uses a Tailscale session only on the host's Tailscale routes", () =>
+    Effect.gen(function* () {
+      const authorized = yield* Ref.make<ReadonlyArray<string>>([]);
+      const layerBroker = yield* makeDependencies({
+        credentials: [["pinned", TAILNET_SESSION]],
+        surface: "mobile",
+        authorizeTailnet: (input) =>
+          Ref.update(authorized, (current) => [...current, input.endpoint.httpBaseUrl]).pipe(
+            Effect.as({
+              environmentId: input.expectedEnvironmentId,
+              label: "Studio",
+              httpBaseUrl: input.endpoint.httpBaseUrl,
+              socketUrl: "ws://studio/ws",
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: TAILNET_SESSION.accessToken,
+                expiresAtEpochMs: TAILNET_SESSION.expiresAtEpochMs,
+                tailnetCredentialId: input.credentialId,
+              },
+            }),
+          ),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
+      const lan = bearerRoute(
+        `learned:${ENVIRONMENT_ID}:http://192.168.1.10:3773@pinned`,
+        "http://192.168.1.10:3773/",
+        { learned: true, authorization: "tailnet" },
+      );
+      const serve = bearerRoute(
+        `learned:${ENVIRONMENT_ID}:https://studio.tail1234.ts.net@pinned`,
+        "https://studio.tail1234.ts.net/",
+        { learned: true, authorization: "tailnet", network: "tailscale" },
+      );
+
+      expect(yield* Effect.flip(broker.prepare(lan.entry))).toMatchObject({
+        _tag: "ConnectionBlockedError",
+        reason: "configuration",
+      });
+      const prepared = yield* broker.prepare(serve.entry);
+
+      expect(prepared.httpAuthorization).toMatchObject({ tailnetCredentialId: "pinned" });
+      expect(yield* Ref.get(authorized)).toEqual(["https://studio.tail1234.ts.net/"]);
+    }),
+  );
+
+  it.effect("switches a paired tailnet route to Tailscale sign-in when its session ends", () =>
+    Effect.gen(function* () {
+      const ended = new ConnectionBlockedError({
+        reason: "authentication",
+        detail: "The environment credential is invalid.",
+        hop: "server",
+      });
+      const paired = bearerRoute("paired", "http://100.88.1.2:3773/");
+      const dependencies = (surface: "web" | "mobile") =>
+        makeDependencies({
+          credentials: [["paired", new BearerConnectionCredential({ token: "expired" })]],
+          surface,
+          tailnetSignIn: true,
+          authorizeBearer: () => Effect.fail(ended),
+          signInTailnet: () => Effect.succeed(TAILNET_SESSION),
+          authorizeTailnet: (input) =>
+            Effect.succeed({
+              environmentId: input.expectedEnvironmentId,
+              label: "Studio",
+              httpBaseUrl: input.endpoint.httpBaseUrl,
+              socketUrl: "ws://100.88.1.2:3773/ws",
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: TAILNET_SESSION.accessToken,
+                expiresAtEpochMs: TAILNET_SESSION.expiresAtEpochMs,
+                tailnetCredentialId: input.credentialId,
+              },
+            }),
+        });
+
+      // Browsers cannot sign in through Tailscale, so the old session's error stands.
+      const web = yield* ConnectionResolver.ConnectionResolver.pipe(
+        Effect.provide(yield* dependencies("web")),
+      );
+      expect(yield* Effect.flip(web.prepare(paired.entry))).toBe(ended);
+
+      const layerMobile = yield* dependencies("mobile");
+      const { prepared, profile, credential } = yield* Effect.gen(function* () {
+        const broker = yield* ConnectionResolver.ConnectionResolver;
+        const prepared = yield* broker.prepare(paired.entry);
+        const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
+        const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
+        return {
+          prepared,
+          profile: yield* profiles.get("paired"),
+          credential: yield* credentials.get("paired"),
+        };
+      }).pipe(Effect.provide(layerMobile));
+
+      expect(prepared.httpAuthorization).toMatchObject({ tailnetCredentialId: "paired" });
+      expect(Option.getOrThrow(credential)).toBe(TAILNET_SESSION);
+      expect(Option.getOrThrow(profile)).toMatchObject({
+        httpBaseUrl: "http://100.88.1.2:3773/",
+        authorization: "tailnet",
+        network: "tailscale",
+      });
+    }),
   );
 });

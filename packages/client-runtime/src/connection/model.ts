@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, TailnetSignInRefusedReason } from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
 import * as Schema from "effect/Schema";
 
@@ -102,6 +102,8 @@ const ConnectionFailureFields = {
   via: Schema.optionalKey(Schema.Literals(["relay", "direct"])),
   failureCause: Schema.optionalKey(ConnectionFailureCause),
   httpStatus: Schema.optionalKey(Schema.Number),
+  /** The check a host's Tailscale sign-in failed. */
+  tailnetRefusal: Schema.optionalKey(TailnetSignInRefusedReason),
 };
 
 export class ConnectionTransientError extends Schema.TaggedError<ConnectionTransientError>()(
@@ -147,6 +149,8 @@ export type PreparedHttpAuthorization =
       readonly _tag: "Dpop";
       readonly accessToken: string;
       readonly expiresAtEpochMs: number;
+      /** Set for a Tailscale session, which renews from this credential instead of T3 Connect. */
+      readonly tailnetCredentialId?: string;
     };
 
 export interface PreparedConnection {
@@ -185,7 +189,9 @@ export type ConnectionRouteOutcome = {
 export function routeDidNotAnswer(outcome: ConnectionRouteOutcome): boolean {
   return (
     outcome.result === "silent" ||
-    (outcome.result === "failed" && outcome.error._tag === "ConnectionTransientError")
+    (outcome.result === "failed" &&
+      outcome.error._tag === "ConnectionTransientError" &&
+      outcome.error.tailnetRefusal === undefined)
   );
 }
 

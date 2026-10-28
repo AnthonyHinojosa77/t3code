@@ -22,6 +22,7 @@ import {
   BearerConnectionProfile,
   type ConnectionCatalogEntry,
   SshConnectionProfile,
+  TailnetConnectionCredential,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import {
@@ -48,7 +49,8 @@ import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
-import { credentialConnectionId } from "./routes.ts";
+import { connectionRouteKind, credentialConnectionId } from "./routes.ts";
+import { supportsTailnetSignIn } from "./tailnet.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 
 export class ConnectionResolver extends Context.Service<
@@ -74,6 +76,7 @@ export class ConnectionResolver extends Context.Service<
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 const isSshProfile = Schema.is(SshConnectionProfile);
 const isBearerCredential = Schema.is(BearerConnectionCredential);
+const isTailnetCredential = Schema.is(TailnetConnectionCredential);
 
 function primarySocketUrl(
   target: PrimaryConnectionTarget,
@@ -124,7 +127,62 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
 
 const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")(function* () {
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
+  const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+  const presentation = yield* ClientCapabilities.ClientPresentation;
+  const httpClient = yield* HttpClient.HttpClient;
+
+  /**
+   * A paired route on the tailnet whose session ended switches to Tailscale
+   * sign-in when the host offers it. Its learned routes borrow the new
+   * credential; the registry picks up the profile after the next connect.
+   */
+  const upgradeToTailnet = Effect.fn("clientRuntime.connection.broker.upgradeToTailnet")(function* (
+    target: BearerConnectionTarget,
+    profile: BearerConnectionProfile,
+    ended: ConnectionAttemptError,
+  ) {
+    // A bare 100.x route reads as "vpn" until the host reports it as Tailscale.
+    const kind = connectionRouteKind({ target, profile: Option.some(profile) });
+    const canUpgrade =
+      ended._tag === "ConnectionBlockedError" &&
+      ended.reason === "authentication" &&
+      profile.learned !== true &&
+      profile.httpBaseUrl.startsWith("http:") &&
+      (kind === "tailnet" || kind === "vpn") &&
+      supportsTailnetSignIn(presentation.metadata);
+    if (!canUpgrade) return yield* ended;
+    const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+      httpBaseUrl: profile.httpBaseUrl,
+    }).pipe(
+      Effect.mapError(mapRemoteEnvironmentError),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
+    if (
+      descriptor.environmentId !== target.environmentId ||
+      descriptor.capabilities.tailnetSignIn !== true
+    ) {
+      return yield* ended;
+    }
+    const session = yield* remote.signInTailnet({ httpBaseUrl: profile.httpBaseUrl });
+    yield* credentials.put(target.connectionId, session);
+    yield* profiles.put(
+      new BearerConnectionProfile({
+        connectionId: profile.connectionId,
+        environmentId: profile.environmentId,
+        label: profile.label,
+        httpBaseUrl: profile.httpBaseUrl,
+        wsBaseUrl: profile.wsBaseUrl,
+        authorization: "tailnet",
+        network: "tailscale",
+      }),
+    );
+    return yield* remote.authorizeTailnet({
+      expectedEnvironmentId: target.environmentId,
+      credentialId: target.connectionId,
+      endpoint: { httpBaseUrl: profile.httpBaseUrl, wsBaseUrl: profile.wsBaseUrl },
+    });
+  });
 
   return Effect.fn("clientRuntime.connection.broker.bearer")(function* (
     entry: ConnectionCatalogEntry & { readonly target: BearerConnectionTarget },
@@ -152,7 +210,8 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
       });
       return { ...authorized, target } satisfies PreparedConnection;
     }
-    const credential = yield* credentials.get(credentialConnectionId(target.connectionId)).pipe(
+    const credentialId = credentialConnectionId(target.connectionId);
+    const credential = yield* credentials.get(credentialId).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(credentialMissingError(target.connectionId)),
@@ -160,16 +219,34 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
         }),
       ),
     );
+    if (isTailnetCredential(credential)) {
+      // A Tailscale session goes only to the host's tailnet and Serve routes.
+      if (connectionRouteKind({ target, profile: Option.some(profile) }) !== "tailnet") {
+        return yield* new ConnectionBlockedError({
+          reason: "configuration",
+          detail: "A Tailscale sign-in is only used on Tailscale addresses.",
+          hop: "device",
+        });
+      }
+      const authorized = yield* remote.authorizeTailnet({
+        expectedEnvironmentId: target.environmentId,
+        credentialId,
+        endpoint: { httpBaseUrl: profile.httpBaseUrl, wsBaseUrl: profile.wsBaseUrl },
+      });
+      return { ...authorized, target } satisfies PreparedConnection;
+    }
     if (!isBearerCredential(credential)) {
       return yield* credentialMissingError(target.connectionId);
     }
-    const authorized = yield* remote.authorizeBearer({
-      expectedEnvironmentId: target.environmentId,
-      httpBaseUrl: profile.httpBaseUrl,
-      wsBaseUrl: profile.wsBaseUrl,
-      bearerToken: credential.token,
-      connectionMethod: "direct",
-    });
+    const authorized = yield* remote
+      .authorizeBearer({
+        expectedEnvironmentId: target.environmentId,
+        httpBaseUrl: profile.httpBaseUrl,
+        wsBaseUrl: profile.wsBaseUrl,
+        bearerToken: credential.token,
+        connectionMethod: "direct",
+      })
+      .pipe(Effect.catch((ended) => upgradeToTailnet(target, profile, ended)));
     return {
       ...authorized,
       target,
