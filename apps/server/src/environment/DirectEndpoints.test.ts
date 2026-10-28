@@ -151,16 +151,14 @@ describe("resolveBoundEndpoints", () => {
     ).toEqual([]);
   });
 
-  it("reports only the tailnet address on a cloud VM, whose private network no client shares", () => {
-    expect(
-      resolveBoundEndpoints({
-        host: "0.0.0.0",
-        port: 3773,
-        interfaces: INTERFACES,
-        onCloudVm: true,
-      }),
-    ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
-  });
+  it.each([{ onCloudVm: true }, { tailscaleOnly: true }])(
+    "reports only the tailnet address with %o, where no LAN client can connect",
+    (mode) => {
+      expect(
+        resolveBoundEndpoints({ host: "0.0.0.0", port: 3773, interfaces: INTERFACES, ...mode }),
+      ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
+    },
+  );
 
   it("never reports an IPv4-mapped host, which can name the client's own loopback", () => {
     expect(

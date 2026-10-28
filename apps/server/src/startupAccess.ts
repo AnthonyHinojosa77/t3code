@@ -72,6 +72,34 @@ export const acceptsPrivateNetworkConnection = (socket: {
     (address) => address !== undefined && isPrivateNetworkAddress(address),
   );
 
+/** The IPv4 address of a plain or IPv4-mapped IPv6 address, or null. */
+const plainIpv4 = (address: string): string | null => {
+  const ipv4 = address.replace(/^::ffff:/i, "");
+  return NodeNet.isIPv4(ipv4) ? ipv4 : null;
+};
+
+const isTailnetIpv4Address = (address: string): boolean => {
+  const ipv4 = plainIpv4(address);
+  return ipv4 !== null && isSharedAddressSpaceHost(ipv4);
+};
+
+const isLoopbackAddress = (address: string): boolean =>
+  address === "::1" || plainIpv4(address)?.startsWith("127.") === true;
+
+/**
+ * A Tailscale-only listener serves loopback and tailnet peers and nothing
+ * else, so LAN devices cannot reach it even on a wildcard bind.
+ */
+export const acceptsTailnetConnection = (socket: {
+  readonly localAddress?: string | undefined;
+  readonly remoteAddress?: string | undefined;
+}): boolean => {
+  const { localAddress, remoteAddress } = socket;
+  if (localAddress === undefined || remoteAddress === undefined) return false;
+  if (isLoopbackAddress(remoteAddress)) return isLoopbackAddress(localAddress);
+  return isTailnetIpv4Address(remoteAddress) && isTailnetIpv4Address(localAddress);
+};
+
 export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): string =>
   address._tag === "InetAddressV6" && NetAddress.isLoopback(address.address)
     ? "[::1]"
@@ -88,6 +116,7 @@ const resolveHeadlessConnectionHost = (
   host: string | undefined,
   interfaces: NetworkInterfacesMap,
   privateNetworkOnly: boolean,
+  tailscaleOnly: boolean,
 ): string => {
   if (!host) {
     return "localhost";
@@ -100,6 +129,13 @@ const resolveHeadlessConnectionHost = (
   const interfaceEntries = Object.entries(interfaces).flatMap(([name, entries]) =>
     privateNetworkOnly && VIRTUAL_INTERFACE.test(name) ? [] : (entries ?? []),
   );
+  if (tailscaleOnly) {
+    const tailnet = interfaceEntries.find(
+      (entry) =>
+        !entry.internal && isIpv4Family(entry.family) && isTailnetIpv4Address(entry.address),
+    );
+    return tailnet?.address ?? "localhost";
+  }
   const externalIpv4Entries = interfaceEntries.filter(
     (entry) =>
       !entry.internal &&
@@ -130,12 +166,14 @@ export const resolveHeadlessConnectionString = (
   options: {
     readonly interfaces?: NetworkInterfacesMap;
     readonly privateNetworkOnly?: boolean | undefined;
+    readonly tailscaleOnly?: boolean | undefined;
   } = {},
 ): string => {
   const connectionHost = resolveHeadlessConnectionHost(
     host,
     options.interfaces ?? NodeOS.networkInterfaces(),
     options.privateNetworkOnly === true,
+    options.tailscaleOnly === true,
   );
   return `http://${formatHostForUrl(connectionHost)}:${port}`;
 };
@@ -209,7 +247,10 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
     : resolveHeadlessConnectionString(
         serverConfig.host,
         resolveListeningPort(httpServer.address, serverConfig.port),
-        { privateNetworkOnly: serverConfig.privateNetworkOnly },
+        {
+          privateNetworkOnly: serverConfig.privateNetworkOnly,
+          tailscaleOnly: serverConfig.tailscaleOnly,
+        },
       );
   const issued = yield* serverAuth.issueStartupPairingCredential();
 

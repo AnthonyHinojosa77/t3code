@@ -13,6 +13,7 @@ import * as ServerConfig from "./config.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import {
   acceptsPrivateNetworkConnection,
+  acceptsTailnetConnection,
   issueHeadlessServeAccessInfo,
   resolveHeadlessConnectionString,
 } from "./startupAccess.ts";
@@ -81,6 +82,20 @@ describe("acceptsPrivateNetworkConnection", () => {
     expect(accepts("203.0.113.7", "192.168.1.31")).toBe(false);
     expect(accepts("169.254.10.1", "169.254.10.2")).toBe(false);
     expect(accepts(undefined, "192.168.1.31")).toBe(false);
+  });
+});
+
+describe("acceptsTailnetConnection", () => {
+  it.each([
+    ["loopback", "127.0.0.1", "127.0.0.1", true],
+    ["a tailnet peer", "100.101.102.103", "100.90.1.2", true],
+    ["a mapped tailnet peer", "::ffff:100.101.102.103", "::ffff:100.90.1.2", true],
+    ["a LAN peer", "192.168.1.20", "192.168.1.31", false],
+    ["a LAN peer on the tailnet address", "100.101.102.103", "192.168.1.31", false],
+    ["loopback reaching a LAN address", "192.168.1.20", "127.0.0.1", false],
+    ["an unknown address", undefined, "100.90.1.2", false],
+  ] as const)("serves %s: %s", (_name, localAddress, remoteAddress, expected) => {
+    expect(acceptsTailnetConnection({ localAddress, remoteAddress })).toBe(expected);
   });
 });
 

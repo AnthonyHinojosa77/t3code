@@ -149,6 +149,9 @@ import {
   RELAY_URL_SECRET,
 } from "./cloud/config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as TailnetSignIn from "./auth/TailnetSignIn.ts";
+import * as TailnetPeers from "./environment/TailnetPeers.ts";
+import * as TailscaleHost from "./tailscale/TailscaleHost.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as GuestHttp from "./guest/http.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
@@ -197,7 +200,11 @@ import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
-import { acceptsPrivateNetworkConnection, loopbackUrlHostForAddress } from "./startupAccess.ts";
+import {
+  acceptsPrivateNetworkConnection,
+  acceptsTailnetConnection,
+  loopbackUrlHostForAddress,
+} from "./startupAccess.ts";
 import * as TailscaleServe from "./tailscaleServe.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
@@ -310,9 +317,14 @@ const layerHttpServer = Layer.unwrap(
         const server = rejectRequestsUntilServing(
           guardHttpResponseWriteErrors(NodeHttp.createServer()),
         );
-        if (config.privateNetworkOnly) {
+        const acceptsConnection = config.tailscaleOnly
+          ? acceptsTailnetConnection
+          : config.privateNetworkOnly
+            ? acceptsPrivateNetworkConnection
+            : undefined;
+        if (acceptsConnection !== undefined) {
           server.on("connection", (socket) => {
-            if (!acceptsPrivateNetworkConnection(socket)) {
+            if (!acceptsConnection(socket)) {
               socket.destroy();
             }
           });
@@ -479,7 +491,10 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
   Layer.provide(T3ProjectFileLoader.layer),
 );
 
-const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
+const layerServerEnvironment = ServerEnvironment.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(TailscaleHost.layer),
+);
 
 const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(layerPersistence),
@@ -721,6 +736,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
+      Layer.provide(AuthHttp.layerTailnet),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(CloudHttp.layer),
       Layer.provide(OrchestrationHttp.layer),
@@ -772,6 +788,12 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(PreviewAutomationBroker.layer),
+  // Tailscale sign-in (HTTP) and its device list and peer list (WebSocket).
+  Layer.provide(
+    Layer.mergeAll(TailnetSignIn.layer, TailnetPeers.layer).pipe(
+      Layer.provide(TailscaleHost.layer),
+    ),
+  ),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
@@ -1052,11 +1074,7 @@ const layerMakeServer = Layer.unwrap(
     return layerServerApplication.pipe(
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
-      Layer.provideMerge(
-        McpSessionRegistry.layer.pipe(
-          Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-        ),
-      ),
+      Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),

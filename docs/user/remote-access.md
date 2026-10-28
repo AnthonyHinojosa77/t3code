@@ -143,6 +143,43 @@ on that machine. Existing threads stay where they started. If resource checks ar
 unavailable or all eligible machines are full, choose a machine manually to continue.
 Mobile keeps its manual environment selection.
 
+### Tailscale sign-in
+
+On a personal tailnet, your own devices can connect to a machine with no pairing
+code. Run this on each machine, as the user who should own T3 Code:
+
+```bash
+npx t3 up
+```
+
+It checks Tailscale, turns on Tailscale sign-in and Tailscale-only networking,
+installs the [background service](./background-service.md), and prints the
+machine's tailnet address with a QR code. Tailscale-only networking accepts
+loopback and tailnet connections and closes the LAN. `--https` also sets up
+Tailscale HTTPS.
+
+Any untagged device that the machine's owner has on the tailnet gets full access,
+including terminals and files. Tagged devices, devices shared in from another
+tailnet, other users, and subnet routers or exit nodes cannot sign in. Browsers
+still need a pairing code. To remove a device's access everywhere, remove it from
+your tailnet; access ends within an hour.
+
+On an untagged machine the owner is its own Tailscale user. On a tagged machine,
+`t3 up` asks for the owner's login, or takes `--owner <login>`. Tag machines that
+run agents, so those agents cannot sign in to your other machines.
+
+`t3 up` writes these settings to `service.env`. Use them with `t3 serve` as flags
+too:
+
+| `service.env`                 | Flag                     | Meaning                                    |
+| ----------------------------- | ------------------------ | ------------------------------------------ |
+| `T3CODE_TAILSCALE_SIGN_IN=1`  | `--tailscale-sign-in`    | Your own devices sign in with no code      |
+| `T3CODE_TAILSCALE_ONLY=1`     | `--tailscale-only`       | Accept only loopback and tailnet peers     |
+| `T3CODE_TAILSCALE_OWNER=<id>` | `--tailscale-owner <id>` | Owner's Tailscale user ID on a tagged host |
+
+Tailscale sign-in does not work with userspace networking, which is common in
+LXC and other containers; `t3 up` tells you when it finds it.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

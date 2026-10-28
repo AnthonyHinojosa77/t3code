@@ -32,6 +32,7 @@ import { tailscaleCommand } from "./cli/tailscale.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
+import { upCommand } from "./cli/up.ts";
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -82,6 +83,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       projectCommand,
       threadCommand,
       serviceCommand,
+      upCommand,
       updateCommand,
       uninstallCommand,
       serviceLauncherCommand,
