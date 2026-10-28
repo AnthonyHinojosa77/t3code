@@ -1710,6 +1710,17 @@ describe("EnvironmentSupervisor routes", () => {
       phase: "blocked",
       reported: "relay",
     },
+    {
+      name: "reports the host's refusal over a refusal with no hop",
+      lan: blocked(),
+      relay: new ConnectionBlockedError({
+        reason: "permission",
+        detail: "The environment refused this device.",
+        hop: "server",
+      }),
+      phase: "blocked",
+      reported: "relay",
+    },
   ] as const)("$name", ({ lan, relay, phase, reported }) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

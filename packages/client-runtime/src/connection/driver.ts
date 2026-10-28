@@ -109,7 +109,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Failure") {
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
       // The host's own refusal says more than this device's.
-      else if (blocked === undefined || blocked.hop === "device") blocked = result.failure;
+      else if (blocked?.hop === undefined || blocked.hop === "device") blocked = result.failure;
     }
     yield* reportRoute(
       result._tag === "Success"
