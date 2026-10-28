@@ -19,6 +19,8 @@ const running: TailscaleStatus = {
   tailnetIpv4Addresses: ["100.64.0.1"],
   httpsServeEnabled: true,
   backendState: "Running",
+  version: "1.102.2",
+  users: [],
   selfNodeId: "n1",
   selfUserId: "1",
   selfTags: [],

@@ -18,7 +18,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
-import { ChildProcessSpawner } from "effect/process";
+import * as TailscaleHost from "../tailscale/TailscaleHost.ts";
 
 const CACHE_TTL = Duration.seconds(30);
 const KEY_EXPIRY_WARNING_MS = Duration.toMillis(Duration.days(7));
@@ -157,16 +157,20 @@ export function formatTailscaleHealth(status: ServerTailscaleStatus): string {
   ].join("\n");
 }
 
-/** Reads and classifies now. The server goes through the cache in {@link TailscaleHealth}. */
-export const readTailscaleHealth = Effect.gen(function* () {
-  const read = yield* Effect.result(readTailscaleStatus);
+const readTailscaleHealthWith = Effect.fn("TailscaleHealth.read")(function* <R>(
+  status: Effect.Effect<TailscaleStatus, TailscaleCommandError | TailscaleStatusParseError, R>,
+) {
+  const read = yield* Effect.result(status);
   const now = yield* DateTime.now;
   return classifyTailscaleHealth(read, {
     checkedAt: DateTime.formatIso(now),
     now: DateTime.toEpochMillis(now),
     platform: yield* HostProcess.Platform,
   });
-}).pipe(Effect.withSpan("TailscaleHealth.read"));
+});
+
+/** Reads and classifies now, for the CLI. The server goes through the cache in {@link TailscaleHealth}. */
+export const readTailscaleHealth = readTailscaleHealthWith(readTailscaleStatus);
 
 export class TailscaleHealth extends Context.Service<
   TailscaleHealth,
@@ -177,13 +181,8 @@ export class TailscaleHealth extends Context.Service<
 >()("t3/environment/TailscaleHealth") {}
 
 const make = Effect.gen(function* () {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const check = yield* Effect.cachedWithTTL(
-    readTailscaleHealth.pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    ),
-    CACHE_TTL,
-  );
+  const host = yield* TailscaleHost.TailscaleHost;
+  const check = yield* Effect.cachedWithTTL(readTailscaleHealthWith(host.status), CACHE_TTL);
   return TailscaleHealth.of({ check });
 });
 

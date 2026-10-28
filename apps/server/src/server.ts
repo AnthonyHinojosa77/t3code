@@ -719,7 +719,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
-  Layer.provideMerge(TailscaleHealth.layer),
+  Layer.provideMerge(TailscaleHealth.layer.pipe(Layer.provide(TailscaleHost.layer))),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
