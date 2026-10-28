@@ -164,6 +164,30 @@ tailnet, other users, and subnet routers or exit nodes cannot sign in. Browsers
 still need a pairing code. To remove a device's access everywhere, remove it from
 your tailnet; access ends within an hour.
 
+To connect from the desktop or mobile app, with Tailscale on:
+
+- **Desktop:** do nothing. The app finds the machines on your tailnet that offer
+  sign-in and adds them.
+- **Phone:** scan the QR code from `t3 up`, or type the machine's name, MagicDNS
+  name, or `100.x` address in **Add environment** and leave the code empty. After
+  that, the phone asks the machines it is connected to for the others and adds
+  them.
+
+A machine you remove stays removed; add it again by name to bring it back. If a
+machine you already have answers at a new address, the app warns you instead of
+adding it. When this device is off Tailscale, its machines stay saved and
+reconnect when Tailscale is back.
+
+To let your phone reach your laptop the same way, turn on **Tailscale sign-in** in
+**Settings → Sharing & access**. The app restarts and listens on your tailnet at
+port 3773, without opening your LAN. If that port is in use, Settings shows the
+port it uses, and other devices add the laptop by name with that port.
+
+To cut off one device on one machine, open **Settings → Sharing & access** on the
+desktop app, or **Environments** on mobile, and **Block** it under **Tailscale
+devices**. Its sessions there end now, and **Unblock** undoes it. A device that
+rejoins Tailscale gets a new ID, so block it again or remove it from your tailnet.
+
 On an untagged machine the owner is its own Tailscale user. On a tagged machine,
 `t3 up` asks for the owner's login, or takes `--owner <login>`. Tag machines that
 run agents, so those agents cannot sign in to your other machines.
