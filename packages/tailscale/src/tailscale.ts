@@ -203,8 +203,11 @@ const TailscaleStatusNodeFields = {
 };
 
 const TailscaleStatusJson = Schema.Struct({
+  Version: lenient(Schema.String),
   BackendState: lenient(Schema.String),
   TUN: lenient(Schema.Boolean),
+  // Keyed by user ID; JSON keys are strings, so the IDs stay exact.
+  User: lenient(Schema.Record(Schema.String, Schema.Struct({ LoginName: lenient(Schema.String) }))),
   Health: lenient(Schema.Array(Schema.String)),
   CertDomains: lenient(Schema.Array(Schema.String)),
   CurrentTailnet: lenient(Schema.Struct({ MagicDNSEnabled: lenient(Schema.Boolean) })),
@@ -255,6 +258,8 @@ export interface TailscalePeer {
 }
 
 export interface TailscaleStatus {
+  /** The daemon's version, such as `1.102.2-t6cac91817-g…`. */
+  readonly version: string | null;
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
   /**
@@ -280,6 +285,8 @@ export interface TailscaleStatus {
    */
   readonly userspaceNetworking: boolean | null;
   readonly peers: readonly TailscalePeer[];
+  /** Users this node can see, by user ID. */
+  readonly users: ReadonlyArray<{ readonly userId: string; readonly loginName: string | null }>;
 }
 
 const collectOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -361,6 +368,7 @@ export const parseTailscaleStatus = (
         ];
       });
       return {
+        version: nonEmptyOrNull(parsed.Version),
         magicDnsName: normalizeMagicDnsName(self?.DNSName),
         tailnetIpv4Addresses: tailnetIpv4AddressesOf(self?.TailscaleIPs),
         httpsServeEnabled: self?.CapMap === undefined ? null : Object.hasOwn(self.CapMap, "https"),
@@ -375,6 +383,10 @@ export const parseTailscaleStatus = (
         certDomains: parsed.CertDomains ?? [],
         userspaceNetworking: parsed.TUN === undefined ? null : !parsed.TUN,
         peers,
+        users: Object.entries(parsed.User ?? {}).map(([userId, user]) => ({
+          userId,
+          loginName: nonEmptyOrNull(user.LoginName),
+        })),
       };
     }),
   );

@@ -64,6 +64,7 @@ const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","Tailscal
 
 // 9007199254740993 is 2^53 + 1, which a JS number rounds to 2^53.
 const fullStatusJson = `{
+  "Version": "1.102.2-t6cac91817-g1",
   "BackendState": "NeedsLogin",
   "TUN": false,
   "Health": ["Tailscale could not connect to the relay server."],
@@ -92,6 +93,10 @@ const fullStatusJson = `{
     "nodekey:d": { "ID": "nSharee", "UserID": 457, "ShareeNode": true },
     "nodekey:e": { "HostName": "no-id" },
     "nodekey:f": { "ID": "nOdd", "HostName": 7, "Online": "yes" }
+  },
+  "User": {
+    "9007199254740993": { "ID": 9007199254740993, "LoginName": "theo@example.com" },
+    "123": { "ID": 123, "LoginName": "tagged-devices" }
   }
 }`;
 
@@ -203,6 +208,7 @@ describe("tailscale", () => {
     Effect.gen(function* () {
       const status = yield* parseTailscaleStatus(tailscaleStatusJson);
       assert.deepEqual(status, {
+        version: null,
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
         httpsServeEnabled: null,
@@ -217,6 +223,7 @@ describe("tailscale", () => {
         certDomains: [],
         userspaceNetworking: null,
         peers: [],
+        users: [],
       });
     }),
   );
@@ -225,6 +232,7 @@ describe("tailscale", () => {
     Effect.gen(function* () {
       const status = yield* parseTailscaleStatus(fullStatusJson);
       assert.deepInclude(status, {
+        version: "1.102.2-t6cac91817-g1",
         backendState: "NeedsLogin",
         selfNodeId: "nSelf",
         selfUserId: "9007199254740993",
@@ -235,6 +243,10 @@ describe("tailscale", () => {
         certDomains: ["desktop.tail.ts.net"],
         userspaceNetworking: true,
         httpsServeEnabled: true,
+        users: [
+          { userId: "123", loginName: "tagged-devices" },
+          { userId: "9007199254740993", loginName: "theo@example.com" },
+        ],
       });
       assert.deepEqual(
         status.peers.map((peer) => [peer.stableNodeId, peer.userId, peer.tags, peer.sharedIn]),
