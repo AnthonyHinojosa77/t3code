@@ -1932,6 +1932,39 @@ describe("EnvironmentRegistry routes", () => {
     }),
   );
 
+  it.effect("re-pairing a route drops routes learned over its Tailscale sign-in", () =>
+    Effect.gen(function* () {
+      const learnedId = `learned:${LAN_TARGET.environmentId}:http://100.88.1.2:3773@${LAN_TARGET.connectionId}`;
+      const learned = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: learnedId });
+      const harness = yield* makeHarness(
+        [LAN_TARGET, learned, RELAY_TARGET],
+        [
+          LAN_PROFILE,
+          new BearerConnectionProfile({
+            connectionId: learnedId,
+            environmentId: LAN_TARGET.environmentId,
+            label: LAN_TARGET.label,
+            httpBaseUrl: "http://100.88.1.2:3773/",
+            wsBaseUrl: "ws://100.88.1.2:3773/",
+            learned: true,
+            authorization: "tailnet",
+            network: "tailscale",
+          }),
+        ],
+        [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.register(lanRegistration());
+
+        expect(routesOf(yield* Ref.get(harness.storedTargets), LAN_TARGET.environmentId)).toEqual([
+          LAN_TARGET,
+          RELAY_TARGET,
+        ]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect(
     "adding a saved SSH host again replaces its route, whatever id it was saved under",
     () =>

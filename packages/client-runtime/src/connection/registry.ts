@@ -50,6 +50,7 @@ import {
   entryWithRoutes,
   findRouteToSameAddress,
   hasSavedBearerRoute,
+  isLearned,
   mergeLearnedRoutes,
   routesAfterRemoving,
   upsertRoute,
@@ -592,10 +593,16 @@ export const make = Effect.gen(function* () {
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);
           const sameAddress = findRouteToSameAddress(existing, route);
+          const id = connectionRouteId(route.target);
           const routes = existing.filter(
             (existing) =>
-              existing !== sameAddress ||
-              connectionRouteId(existing.target) === connectionRouteId(route.target),
+              (existing !== sameAddress || connectionRouteId(existing.target) === id) &&
+              // Routes learned over the old credential may carry its Tailscale
+              // sign-in; the next connect learns them again with the new one.
+              !(
+                isLearned(existing) &&
+                credentialConnectionId(connectionRouteId(existing.target)) === id
+              ),
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
           if (next.addressesChanged) {
