@@ -1,7 +1,8 @@
-import { useEffect, useEffectEvent, useRef } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import { useContext, useEffect, useEffectEvent, useRef } from "react";
 
 import { discoverTailnetMachines } from "~/connection/onboarding";
-import { useConnectedEnvironmentIds } from "~/state/environments";
+import { environmentSummaries } from "~/state/presentation";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { toastManager } from "../ui/toast";
 
@@ -14,7 +15,7 @@ const DISCOVERY_MIN_GAP_MS = 30_000;
  * sign-in, from its own peer list and from each connected machine, and says so.
  */
 export function TailnetDiscoveryCoordinator() {
-  const connectedKey = useConnectedEnvironmentIds().join(",");
+  const registry = useContext(RegistryContext);
   const discover = useAtomCommand(discoverTailnetMachines, { reportFailure: false });
   // Each conflict is worth one warning per app run, not one every few minutes.
   const warned = useRef(new Set<string>());
@@ -46,12 +47,19 @@ export function TailnetDiscoveryCoordinator() {
     }
   });
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the tailnet, an outside system, at start, every few minutes, and when a machine connects
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the tailnet, an outside system, at start, every few minutes, and when the connected machines change
   useEffect(() => {
-    void run();
+    const unsubscribe = registry.subscribe(
+      environmentSummaries.connectedEnvironmentIdsAtom,
+      () => void run(),
+      { immediate: true },
+    );
     const timer = setInterval(() => void run(), DISCOVERY_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [connectedKey]);
+    return () => {
+      unsubscribe();
+      clearInterval(timer);
+    };
+  }, [registry]);
 
   return null;
 }

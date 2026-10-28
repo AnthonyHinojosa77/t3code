@@ -54,9 +54,10 @@ export const signInOverTailnet = Effect.fn("clientRuntime.authorization.signInOv
       client.signIn({ headers: { dpop: signInProof } }).pipe(
         Effect.map((grant) => ({ _tag: "Granted" as const, grant })),
         // A refusal is a declared answer, not a transport failure.
-        Effect.catchTag("EnvironmentTailnetSignInRefusedError", (refused) =>
-          Effect.succeed({ _tag: "Refused" as const, refused }),
-        ),
+        Effect.catchTags({
+          EnvironmentTailnetSignInRefusedError: (refused) =>
+            Effect.succeed({ _tag: "Refused" as const, refused }),
+        }),
       ),
     ).pipe(Effect.mapError((error) => mapRemoteEnvironmentError(error)));
     if (answer._tag === "Refused") {

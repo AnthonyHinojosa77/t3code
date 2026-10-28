@@ -4,12 +4,13 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, TailnetDevice } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useState } from "react";
 import { View } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { useEnvironmentServerConfig } from "../../state/entities";
+import { useEnvironmentQuery } from "../../state/query";
 import { tailnetEnvironment } from "../../state/tailnet";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "../settings/components/SettingsSection";
@@ -30,24 +31,19 @@ export function TailnetDevicesSection(props: {
   const config = useEnvironmentServerConfig(props.environmentId);
   const offered = config?.environment.capabilities.tailnetSignIn === true;
   const canManage = useAtomValue(
-    tailnetEnvironment.listDevices.permissionAtom(props.environmentId),
+    tailnetEnvironment.blockDevice.permissionAtom(props.environmentId),
   );
-  const listDevices = useAtomCommand(tailnetEnvironment.listDevices, { reportFailure: false });
+  const listed = useEnvironmentQuery(
+    offered && canManage
+      ? tailnetEnvironment.devices({ environmentId: props.environmentId, input: {} })
+      : null,
+  );
   const blockDevice = useAtomCommand(tailnetEnvironment.blockDevice, { reportFailure: false });
   const unblockDevice = useAtomCommand(tailnetEnvironment.unblockDevice, { reportFailure: false });
-  const [devices, setDevices] = useState<ReadonlyArray<TailnetDevice>>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const devices = listed.data?.devices ?? [];
 
-  const load = useEffectEvent(async () => {
-    const result = await listDevices({ environmentId: props.environmentId, input: {} });
-    if (result._tag === "Success") setDevices(result.value.devices);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listing needs access:write, so it is a guarded command run when the section shows, not a query
-  useEffect(() => {
-    if (offered && canManage) void load();
-  }, [offered, canManage, props.environmentId]);
-
-  if (!offered || !canManage || devices.length === 0) return null;
+  if (devices.length === 0) return null;
 
   const apply = async (device: TailnetDevice) => {
     setBusyId(device.stableNodeId);
@@ -63,7 +59,6 @@ export function TailnetDevicesSection(props: {
         failureMessage(result),
       );
     }
-    await load();
   };
 
   const toggle = (device: TailnetDevice) => {

@@ -4,9 +4,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, TailnetDevice } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
+import { useEnvironmentQuery } from "~/state/query";
 import { tailnetEnvironment } from "~/state/tailnet";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
@@ -28,29 +29,16 @@ export function TailnetDevicesSettings({
 }: {
   readonly environmentId: EnvironmentId;
 }) {
-  const canManage = useAtomValue(tailnetEnvironment.listDevices.permissionAtom(environmentId));
-  const listDevices = useAtomCommand(tailnetEnvironment.listDevices, { reportFailure: false });
+  const canManage = useAtomValue(tailnetEnvironment.blockDevice.permissionAtom(environmentId));
+  const listed = useEnvironmentQuery(
+    canManage ? tailnetEnvironment.devices({ environmentId, input: {} }) : null,
+  );
   const blockDevice = useAtomCommand(tailnetEnvironment.blockDevice, { reportFailure: false });
   const unblockDevice = useAtomCommand(tailnetEnvironment.unblockDevice, { reportFailure: false });
-  const [devices, setDevices] = useState<ReadonlyArray<TailnetDevice> | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const devices = listed.data?.devices ?? null;
 
-  const load = useEffectEvent(async () => {
-    const result = await listDevices({ environmentId, input: {} });
-    if (result._tag === "Success") {
-      setDevices(result.value.devices);
-      setError(null);
-    } else if (!isAtomCommandInterrupted(result)) {
-      setError(failureMessage(result));
-    }
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listing needs access:write, so it is a guarded command run when the section shows, not a query
-  useEffect(() => {
-    if (canManage) void load();
-  }, [canManage, environmentId]);
-
-  if (!canManage || (devices !== null && devices.length === 0 && error === null)) return null;
+  if (!canManage || (devices !== null && devices.length === 0)) return null;
 
   const toggle = async (device: TailnetDevice) => {
     const name = device.label ?? device.stableNodeId;
@@ -74,13 +62,12 @@ export function TailnetDevicesSettings({
         }),
       );
     }
-    await load();
   };
 
   return (
     <SettingsSection id="tailscale-devices" title="Tailscale devices">
-      {error !== null ? (
-        <SettingsRow title="Could not load Tailscale devices" description={error} />
+      {listed.error !== null ? (
+        <SettingsRow title="Could not load Tailscale devices" description={listed.error} />
       ) : devices === null ? (
         <SettingsRow title="Loading Tailscale devices…" role="status" />
       ) : (
