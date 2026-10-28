@@ -471,7 +471,7 @@ describe("tailscale", () => {
             if (command._tag !== "StandardCommand") return Effect.die("unexpected pipeline");
             tried.push({
               command: command.command,
-              beCli: command.options.env?.["TAILSCALE_BE_CLI"],
+              beCli: command.options.env?.["TS_BE_CLI"],
             });
             return command.command === installedAt
               ? Effect.succeed(mockHandle({ stdout: tailscaleStatusJson }))

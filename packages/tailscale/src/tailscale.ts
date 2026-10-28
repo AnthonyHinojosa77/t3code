@@ -397,10 +397,8 @@ const runTailscale = Effect.fn("tailscale.runTailscale")(function* (
     spawner.spawn(
       ChildProcess.make(path, [...args], {
         forceKillAfter: TAILSCALE_KILL_GRACE,
-        // The bundle binary opens the GUI unless told to act as the CLI.
-        ...(path.startsWith("/Applications/")
-          ? { env: { TAILSCALE_BE_CLI: "1" }, extendEnv: true }
-          : {}),
+        // tailscaled reads TS_BE_CLI to act as the CLI (cmd/tailscaled/tailscaled.go).
+        ...(path.startsWith("/Applications/") ? { env: { TS_BE_CLI: "1" }, extendEnv: true } : {}),
       }),
     );
   const spawnFirstInstalled = (hostPlatform === "darwin" ? DARWIN_FALLBACK_EXECUTABLES : []).reduce(
