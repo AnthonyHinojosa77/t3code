@@ -569,7 +569,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                         />
                       </button>
                     ) : (
-                      <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-2xs text-muted-foreground/70">
+                      <div
+                        className={cn(
+                          "flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-2xs text-muted-foreground/70",
+                          loneImage && "h-48 w-64 max-w-full",
+                        )}
+                      >
                         {image.name}
                       </div>
                     )}
