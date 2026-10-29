@@ -15,6 +15,8 @@ export interface AuthHttpContext {
   readonly authStore: AuthStore;
   readonly personalMode: boolean;
   readonly ownerEmail: string | null;
+  /** Cookie Secure flag. Tests pass a plain object instead of editing process.env. */
+  readonly cookieEnv: NodeJS.ProcessEnv;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -169,7 +171,7 @@ async function register(
     res,
     201,
     { user: toPublicUser(user), token: session.token },
-    { "set-cookie": sessionSetCookie(session.token) },
+    { "set-cookie": sessionSetCookie(session.token, ctx.cookieEnv) },
   );
 }
 
@@ -217,15 +219,15 @@ async function login(
     res,
     200,
     { user: toPublicUser(user), token: session.token },
-    { "set-cookie": sessionSetCookie(session.token) },
+    { "set-cookie": sessionSetCookie(session.token, ctx.cookieEnv) },
   );
 }
 
-function logout(req: IncomingMessage, res: ServerResponse, store: AuthStore): void {
+function logout(req: IncomingMessage, res: ServerResponse, ctx: AuthHttpContext): void {
   const token = readSessionToken(req);
-  if (token) store.deleteSession(token);
+  if (token) ctx.authStore.deleteSession(token);
   req.resume();
-  sendJson(res, 200, { ok: true }, { "set-cookie": sessionClearCookie() });
+  sendJson(res, 200, { ok: true }, { "set-cookie": sessionClearCookie(ctx.cookieEnv) });
 }
 
 /** Returns false when this path is not an auth route the gateway implements. */
@@ -245,7 +247,7 @@ export async function handleAuthHttp(
     return true;
   }
   if (url.pathname === "/api/auth/logout" && method === "POST") {
-    logout(req, res, ctx.authStore);
+    logout(req, res, ctx);
     return true;
   }
   if (url.pathname === "/api/auth/me" && method === "GET") {

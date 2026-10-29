@@ -86,6 +86,11 @@ export interface TunnelServerOptions {
    * page loads are proxied, and nothing is read from `apps/web/dist`.
    */
   readonly webDist?: string | null;
+  /**
+   * Env used for the session cookie Secure flag. Omitted means `process.env`.
+   * Tests pass a plain object so they do not edit the process environment.
+   */
+  readonly cookieEnv?: NodeJS.ProcessEnv;
 }
 
 export interface RunningTunnelServer {
@@ -412,6 +417,7 @@ export async function startTunnelServer(
           authStore: options.authStore ?? null,
           personalMode,
           ownerEmail: options.ownerEmail ?? null,
+          cookieEnv: options.cookieEnv ?? process.env,
         });
         if (!handled) {
           req.resume();

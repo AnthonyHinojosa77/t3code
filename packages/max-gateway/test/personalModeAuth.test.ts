@@ -112,6 +112,8 @@ async function startGateway(options: {
   readonly personalMode: boolean;
   readonly ownerEmail: string | null;
   readonly webDist?: string | null;
+  /** Empty by default so a developer machine's env cannot flip the cookie to Secure. */
+  readonly cookieEnv?: NodeJS.ProcessEnv;
 }): Promise<Gateway> {
   const store = openAuthStore(path.join(options.dir, "auth.sqlite"));
   const server = await startTunnelServer({
@@ -120,6 +122,7 @@ async function startGateway(options: {
     personalMode: options.personalMode,
     ownerEmail: options.ownerEmail,
     webDist: options.webDist ?? null,
+    cookieEnv: options.cookieEnv ?? {},
     authStore: store,
     isOwnerRequest: maximusSessionOwnerAuth((token) => store.readSession(token) !== null),
   });
@@ -197,6 +200,7 @@ describe("personal mode auth", () => {
       expect(registered.setCookie).toContain("maximus_session=");
       expect(registered.setCookie).toContain("HttpOnly");
       expect(registered.setCookie).toContain("SameSite=Lax");
+      expect(registered.setCookie).not.toContain("Secure");
       const created = JSON.parse(registered.body) as { user: { email: string; plan: string } };
       expect(created.user.email).toBe(OWNER_EMAIL);
       expect(created.user.plan).toBe("beta");
@@ -219,6 +223,7 @@ describe("personal mode auth", () => {
         body: JSON.stringify({ email: OWNER_EMAIL, password: OWNER_PASSWORD }),
       });
       expect(loggedIn.status).toBe(200);
+      expect(loggedIn.setCookie).not.toContain("Secure");
       const cookie = sessionCookie(loggedIn.setCookie);
       const me = await send(`${gateway.url}/api/auth/me`, { headers: { cookie } });
       expect(me.status).toBe(200);
@@ -296,6 +301,40 @@ describe("personal mode auth", () => {
         headers: { cookie: fresh },
       });
       expect(expired.status).toBe(401);
+    } finally {
+      await gateway.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("sets a Secure session cookie on register and login when RAILWAY_ENVIRONMENT is set", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "t3mc-auth-"));
+    const gateway = await startGateway({
+      dir,
+      personalMode: true,
+      ownerEmail: OWNER_EMAIL,
+      cookieEnv: { RAILWAY_ENVIRONMENT: "production" },
+    });
+    try {
+      const registered = await send(`${gateway.url}/api/auth/register`, {
+        method: "POST",
+        body: JSON.stringify({ email: OWNER_EMAIL, password: OWNER_PASSWORD }),
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.setCookie).toContain("maximus_session=");
+      expect(registered.setCookie).toContain("HttpOnly");
+      expect(registered.setCookie).toContain("SameSite=Lax");
+      expect(registered.setCookie).toContain("Secure");
+
+      const loggedIn = await send(`${gateway.url}/api/auth/login`, {
+        method: "POST",
+        body: JSON.stringify({ email: OWNER_EMAIL, password: OWNER_PASSWORD }),
+      });
+      expect(loggedIn.status).toBe(200);
+      expect(loggedIn.setCookie).toContain("maximus_session=");
+      expect(loggedIn.setCookie).toContain("HttpOnly");
+      expect(loggedIn.setCookie).toContain("SameSite=Lax");
+      expect(loggedIn.setCookie).toContain("Secure");
     } finally {
       await gateway.close();
       await rm(dir, { recursive: true, force: true });

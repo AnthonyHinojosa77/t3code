@@ -4,18 +4,31 @@ import type { IncomingMessage } from "node:http";
 import { readCookie } from "../ownerAuth.ts";
 import { SESSION_COOKIE, SESSION_MAX_AGE_MS } from "./store.ts";
 
-function secureAttribute(): string {
-  return process.env.NODE_ENV === "production" ? "; Secure" : "";
+/**
+ * Secure on HTTPS deployments. Local dev stays non-Secure so the cookie is
+ * stored on http://127.0.0.1. Pass `env` in tests; the default is `process.env`.
+ * A non-empty `RAILWAY_ENVIRONMENT` counts as Railway. The variables reference
+ * also publishes `RAILWAY_ENVIRONMENT_NAME`; `NODE_ENV=production` is the
+ * setting the runbook requires so the cookie is Secure either way.
+ */
+export function sessionCookieIsSecure(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.NODE_ENV === "production") return true;
+  const railway = env.RAILWAY_ENVIRONMENT?.trim();
+  return railway !== undefined && railway.length > 0;
 }
 
-/** HttpOnly, SameSite=Lax, Path=/, 30 days. Secure only when NODE_ENV is production. */
-export function sessionSetCookie(token: string): string {
+function secureAttribute(env: NodeJS.ProcessEnv): string {
+  return sessionCookieIsSecure(env) ? "; Secure" : "";
+}
+
+/** HttpOnly, SameSite=Lax, Path=/, 30 days. Secure when `sessionCookieIsSecure` is true. */
+export function sessionSetCookie(token: string, env: NodeJS.ProcessEnv = process.env): string {
   const maxAge = Math.floor(SESSION_MAX_AGE_MS / 1000);
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureAttribute()}`;
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureAttribute(env)}`;
 }
 
-export function sessionClearCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureAttribute()}`;
+export function sessionClearCookie(env: NodeJS.ProcessEnv = process.env): string {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureAttribute(env)}`;
 }
 
 /**

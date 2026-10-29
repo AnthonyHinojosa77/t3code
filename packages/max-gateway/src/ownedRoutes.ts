@@ -10,6 +10,7 @@ export interface OwnedRouteContext {
   readonly authStore: AuthStore | null;
   readonly personalMode: boolean;
   readonly ownerEmail: string | null;
+  readonly cookieEnv: NodeJS.ProcessEnv;
 }
 
 function isProviderPath(pathname: string): boolean {
@@ -55,6 +56,7 @@ export async function handleOwnedHttp(
       authStore: ctx.authStore,
       personalMode: ctx.personalMode,
       ownerEmail: ctx.ownerEmail,
+      cookieEnv: ctx.cookieEnv,
     };
     return handleAuthHttp(req, res, url, auth);
   }

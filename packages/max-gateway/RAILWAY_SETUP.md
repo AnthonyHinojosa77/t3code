@@ -59,7 +59,7 @@ The account database is the file `max.sqlite` inside that mount. `RAILWAY_VOLUME
 
 ### 2.5 Environment variables
 
-Names only. Values stay empty in git. The lists match `packages/max-gateway/.env.example`.
+Names only, except `NODE_ENV=production` in the example so the session cookie is Secure. Other values stay empty in git. The lists match `packages/max-gateway/.env.example`.
 
 Gateway, on the Railway service:
 
@@ -68,6 +68,7 @@ Gateway, on the Railway service:
 | `MAX_TUNNEL_SECRET`          | Required. Shared with the Mini. See 2.6.                                                                                                    |
 | `PORT`                       | Leave unset. Railway injects it. `start.ts` uses it, and falls back to `8080` only when it is absent. It must be a positive integer.        |
 | `HOST`                       | Optional. `start.ts` defaults to `0.0.0.0`, which is what Railway's proxy needs.                                                            |
+| `NODE_ENV`                   | Set to `production`. That makes the `maximus_session` cookie Secure.                                                                        |
 | `OWNER_EMAIL`                | Personal mode allows only this address, compared case-insensitively. If it is unset, nobody can register or log in.                         |
 | `MAX_PERSONAL_MODE`          | Optional. Unset or any value other than exactly `false` keeps personal mode on. `false` opens registration and billing.                     |
 | `MAX_DB_PATH`                | Optional file path for the SQLite account database. Unset uses `$RAILWAY_VOLUME_MOUNT_PATH/max.sqlite`, or `/data/max.sqlite`.              |
