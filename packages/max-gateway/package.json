@@ -29,7 +29,12 @@
     "start": "node --experimental-strip-types src/start.ts",
     "companion": "node --experimental-strip-types src/miniCompanion.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vp test run --config ../../vite.config.ts --dir ."
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "companion:install": "node --experimental-strip-types scripts/companion-service.ts install",
+    "companion:uninstall": "node --experimental-strip-types scripts/companion-service.ts uninstall",
+    "companion:restart": "node --experimental-strip-types scripts/companion-service.ts restart",
+    "companion:status": "node --experimental-strip-types scripts/companion-service.ts status",
+    "companion:logs": "node --experimental-strip-types scripts/companion-service.ts logs"
   },
   "dependencies": {
     "bcryptjs": "catalog:",

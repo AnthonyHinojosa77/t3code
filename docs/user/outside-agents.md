@@ -110,6 +110,14 @@ runs in the project folder unless you pass `--worktree <base-branch>`. `send`
 never interrupts: a busy thread gets the message as its next turn. Pass `-` as
 the message to read it from stdin.
 
+To choose a model and its settings when starting a thread, pass both
+`--provider <instance-id>` and `--model <slug>`. Add `--effort <value>` or
+`--fast` for settings the model advertises, or `--model-options` with a JSON
+array such as `'[{"id":"reasoningEffort","value":"high"}]'` (an object such
+as `'{"reasoningEffort":"high"}'` also works). Explicit JSON values override
+the shortcuts. Unsupported options report the allowed values. These settings
+apply to `start`; `send` uses the thread's existing model selection.
+
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
