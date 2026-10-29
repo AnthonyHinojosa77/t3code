@@ -104,7 +104,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
     const body: Record<string, string> = { email, password };
     if (mode === "register" && displayName.trim()) body.displayName = displayName.trim();
-    try {
+    const sendCredentials = async () => {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -122,11 +122,15 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
         const current = (await me.json()) as { personalMode?: boolean };
         setPersonalMode(current.personalMode === true);
       }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Network error");
-    } finally {
-      setSubmitting(false);
-    }
+    };
+    // Promise handlers, not try/finally: React Compiler cannot lower a `finally` clause.
+    await sendCredentials()
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : "Network error");
+      })
+      .finally(() => {
+        setSubmitting(false);
+      });
   }
 
   if (loading) {
