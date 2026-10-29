@@ -1,0 +1,42 @@
+/* MAX terminal look. Every rule sits under `.max-scope`, so stock T3 screens are untouched.
+   Layered as components so Tailwind utilities on the same element still win. */
+@layer components {
+  .max-scope {
+    --max-black: #0a0a0a;
+    --max-darker: #1a1a1a;
+    --max-line: #2a2a2a;
+    --max-line-strong: #3a3a3a;
+    --max-light: #e0e0e0;
+    /* MAX's #666 is below 4.5:1 on the black ground; this keeps its tone and passes. */
+    --max-muted: #8a8a8a;
+    --max-green: #00ff41;
+    --max-amber: #ffb000;
+
+    background-color: var(--max-black);
+    color: var(--max-light);
+    font-family:
+      "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+
+  /* The one bold moment: CRT glow on the wordmark only. */
+  .max-scope .max-wordmark {
+    color: var(--max-green);
+    letter-spacing: 0.2em;
+    text-shadow:
+      0 0 4px rgba(0, 255, 65, 0.6),
+      0 0 8px rgba(0, 255, 65, 0.3),
+      0 0 16px rgba(0, 255, 65, 0.1);
+  }
+
+  .max-scope :focus-visible {
+    outline: 1px solid var(--max-green);
+    outline-offset: 2px;
+  }
+
+  @media (forced-colors: active) {
+    .max-scope .max-wordmark {
+      text-shadow: none;
+    }
+  }
+}
