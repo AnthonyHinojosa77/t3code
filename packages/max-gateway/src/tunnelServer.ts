@@ -19,6 +19,7 @@ import {
   jsonBuffer,
   parseJsonPayload,
   sendFrames,
+  sendableCloseCode,
   type HttpRequestFrame,
   type HttpResponseHeadFrame,
   type StreamErrorFrame,
@@ -369,7 +370,7 @@ export async function startTunnelServer(
     if (type === FrameType.wsClose) {
       const close = parseJsonPayload<WsCloseFrame>(payload);
       dropStream(streamId, stream);
-      stream.client?.close(close.code || 1000, close.reason);
+      stream.client?.close(sendableCloseCode(close.code), close.reason);
       return;
     }
     if (type === FrameType.streamError) {

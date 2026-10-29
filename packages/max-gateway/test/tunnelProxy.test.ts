@@ -68,6 +68,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+interface CapturedUpgrade {
+  readonly url: string;
+  readonly authorization: string | null;
+  readonly cookie: string | null;
+}
+
 interface Upstream {
   readonly port: number;
   readonly url: string;
@@ -75,6 +81,7 @@ interface Upstream {
   readonly requests: CapturedRequest[];
   readonly wsMessages: CapturedWs[];
   readonly upgrades: string[];
+  readonly upgradeRequests: CapturedUpgrade[];
   stallAborted: () => boolean;
   close: () => Promise<void>;
 }
@@ -86,6 +93,7 @@ async function startUpstream(
   const requests: CapturedRequest[] = [];
   const wsMessages: CapturedWs[] = [];
   const upgrades: string[] = [];
+  const upgradeRequests: CapturedUpgrade[] = [];
   let releaseSecondHalf = (): void => {};
   const secondHalf = new Promise<void>((resolve) => {
     releaseSecondHalf = resolve;
@@ -206,11 +214,28 @@ async function startUpstream(
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   server.on("upgrade", (req, socket, head) => {
     upgrades.push(req.url ?? "/");
+    const authorization =
+      typeof req.headers.authorization === "string" ? req.headers.authorization : null;
+    upgradeRequests.push({
+      url: req.url ?? "/",
+      authorization,
+      cookie: typeof req.headers.cookie === "string" ? req.headers.cookie : null,
+    });
     if (!req.url?.startsWith("/ws")) {
       socket.destroy();
       return;
     }
+    // Like T3: with no wsTicket the upgrade must carry the bearer.
+    if (!req.url.includes("wsTicket=") && authorization !== `Bearer ${TOKEN}`) {
+      socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
     sockets.handleUpgrade(req, socket, head, (ws) => {
+      if (req.url?.includes("terminate=1")) {
+        // An abnormal drop, as when T3 restarts: no close frame, so the code is 1006.
+        ws.send("upstream-hello", () => ws.terminate());
+        return;
+      }
       ws.send("upstream-hello");
       ws.send(Buffer.from([9, 8, 7]));
       ws.on("message", (data, isBinary) => {
@@ -228,6 +253,7 @@ async function startUpstream(
     requests,
     wsMessages,
     upgrades,
+    upgradeRequests,
     stallAborted: () => stallAborted,
     close: async () => {
       releaseSecondHalf();
@@ -629,6 +655,99 @@ describe("max gateway tunnel", () => {
       });
       expect(JSON.parse(session.body.toString("utf8"))).toEqual({ authenticated: false });
       expect(stack.upstream.requests[1]?.anonymousMarker).toBeNull();
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("injects the scoped bearer into the upstream websocket handshake", async () => {
+    const stack = await startStack();
+    try {
+      // The browser-primary shape: no wsTicket, only the session cookie and a protocol param.
+      const client = new WebSocket(
+        `ws://127.0.0.1:${stack.gateway.port}/ws?orchestrationProtocol=2`,
+        { headers: ownerHeaders(stack.sessionToken, { authorization: "Bearer intruder" }) },
+      );
+      // The gateway accepts the client first, so wait for the upstream's own greeting.
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          client.once("message", (data) => {
+            if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
+            else reject(new Error("unexpected first message"));
+          });
+          client.once("close", (code) => reject(new Error(`closed with ${code} before upstream`)));
+          client.once("error", reject);
+        }),
+        3_000,
+        "ticketless websocket reaches upstream",
+      );
+      const ticketless = stack.upstream.upgradeRequests.find((request) =>
+        request.url.startsWith("/ws?orchestrationProtocol=2"),
+      );
+      expect(ticketless?.url).toBe("/ws?orchestrationProtocol=2");
+      expect(ticketless?.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(ticketless?.cookie).toBeNull();
+      // No close code arrives as 1005; the tunnel must survive it for the next socket.
+      client.close();
+
+      // A ticketed socket carries the bearer too, over the same tunnel.
+      const ticketed = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-2`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          ticketed.once("message", () => resolve());
+          ticketed.once("close", (code) => reject(new Error(`closed with ${code}`)));
+          ticketed.once("error", reject);
+        }),
+        3_000,
+        "ticketed websocket reaches upstream",
+      );
+      expect(
+        stack.upstream.upgradeRequests.find((request) => request.url === "/ws?wsTicket=ticket-2")
+          ?.authorization,
+      ).toBe(`Bearer ${TOKEN}`);
+      ticketed.close();
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("survives an upstream socket that drops without a close frame", async () => {
+    const stack = await startStack();
+    try {
+      const dropped = new WebSocket(
+        `ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-3&terminate=1`,
+        { headers: ownerHeaders(stack.sessionToken) },
+      );
+      const closeCode = await withTimeout(
+        new Promise<number>((resolve, reject) => {
+          dropped.once("close", (code) => resolve(code));
+          dropped.once("error", reject);
+        }),
+        3_000,
+        "dropped websocket close",
+      );
+      expect(closeCode).toBe(1000);
+
+      const next = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-4`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          next.once("message", (data) => {
+            if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
+            else reject(new Error("unexpected first message"));
+          });
+          next.once("close", (code, reason) =>
+            reject(new Error(`closed with ${code} ${reason.toString()}`)),
+          );
+          next.once("error", reject);
+        }),
+        3_000,
+        "websocket after an abnormal drop",
+      );
+      next.close(1000);
     } finally {
       await stack.close();
     }

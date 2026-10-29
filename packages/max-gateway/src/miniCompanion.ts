@@ -18,6 +18,7 @@ import {
   jsonBuffer,
   parseJsonPayload,
   sendFrames,
+  sendableCloseCode,
   type HttpRequestFrame,
   type HttpResponseHeadFrame,
   type WsCloseFrame,
@@ -240,7 +241,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
       const stream = streams.get(frame.streamId);
       const close = parseJsonPayload<WsCloseFrame>(frame.payload);
       streams.delete(frame.streamId);
-      if (stream?.kind === "ws") stream.socket?.close(close.code || 1000, close.reason);
+      if (stream?.kind === "ws") stream.socket?.close(sendableCloseCode(close.code), close.reason);
     }
   }
 
@@ -310,10 +311,27 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
   function openWs(streamId: number, request: WsOpenFrame): void {
     const stream: LiveWs = { kind: "ws", socket: null, pending: [], open: false };
     streams.set(streamId, stream);
+    void finishWs(streamId, stream, request);
+  }
+
+  async function finishWs(streamId: number, stream: LiveWs, request: WsOpenFrame): Promise<void> {
+    // Sockets are never public bootstrap, so the upgrade always carries the bearer. The
+    // browser's primary socket has no wsTicket, and T3 then authenticates the bearer header.
+    let token: string;
+    try {
+      token = await tokens.getToken();
+    } catch {
+      if (streams.get(streamId) !== stream) return;
+      streams.delete(streamId);
+      send(streamId, FrameType.wsOpenResult, jsonBuffer({ ok: false }));
+      return;
+    }
+    if (streams.get(streamId) !== stream) return;
     const wsOptions = {
       perMessageDeflate: false,
       handshakeTimeout: 10_000,
       maxPayload: 16 * 1024 * 1024,
+      headers: { authorization: `Bearer ${token}` },
     } as const;
     const upstream =
       request.protocols.length > 0
