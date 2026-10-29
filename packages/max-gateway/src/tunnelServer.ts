@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
+import { isMaxAuthRoute } from "./auth/http.ts";
 import type { AuthStore } from "./auth/store.ts";
 import { handleOwnedHttp } from "./ownedRoutes.ts";
 import type { OwnerRequestCheck } from "./ownerAuth.ts";
@@ -42,14 +43,18 @@ const UPGRADE_TIMEOUT_MS = 15_000;
 
 export type GatewayPathKind = "health" | "tunnel" | "owned" | "proxy";
 
-export function classifyPath(pathname: string): GatewayPathKind {
+/**
+ * `owned` paths are answered by the gateway; `proxy` paths go to the Mini behind the owner
+ * check. Under `/api/auth/` only MAX's exact endpoints are owned; the rest is T3's
+ * environment auth API and is proxied. WebSocket upgrades classify as GET.
+ */
+export function classifyPath(pathname: string, method = "GET"): GatewayPathKind {
   if (pathname === "/__max/health") return "health";
   if (pathname === "/__max/tunnel") return "tunnel";
   if (
     pathname === "/__max" ||
     pathname.startsWith("/__max/") ||
-    pathname === "/api/auth" ||
-    pathname.startsWith("/api/auth/") ||
+    isMaxAuthRoute(method, pathname) ||
     pathname === "/api/billing" ||
     pathname.startsWith("/api/billing/")
   ) {
@@ -387,7 +392,7 @@ export async function startTunnelServer(
 
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    const kind = classifyPath(url.pathname);
+    const kind = classifyPath(url.pathname, req.method ?? "GET");
     if (kind === "health") {
       req.resume();
       const body = '{"ok":true}\n';
@@ -497,7 +502,7 @@ export async function startTunnelServer(
   function handleClientUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     void (async () => {
-      if (classifyPath(url.pathname) !== "proxy") {
+      if (classifyPath(url.pathname, req.method ?? "GET") !== "proxy") {
         writeHttp(socket, 404, "not found\n");
         return;
       }

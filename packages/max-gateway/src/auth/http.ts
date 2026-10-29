@@ -230,6 +230,25 @@ function logout(req: IncomingMessage, res: ServerResponse, ctx: AuthHttpContext)
   sendJson(res, 200, { ok: true }, { "set-cookie": sessionClearCookie(ctx.cookieEnv) });
 }
 
+/**
+ * The only `/api/auth/*` endpoints MAX answers itself, by method and exact path.
+ * T3's environment auth API shares the prefix (`/api/auth/session`, `/browser-session`,
+ * `/websocket-ticket`, pairing and clients), so every other `/api/auth/*` request is
+ * proxied to the Mini like any T3 path.
+ */
+export const MAX_AUTH_ROUTES: ReadonlyArray<{ readonly method: string; readonly path: string }> = [
+  { method: "POST", path: "/api/auth/register" },
+  { method: "POST", path: "/api/auth/login" },
+  { method: "POST", path: "/api/auth/logout" },
+  { method: "GET", path: "/api/auth/me" },
+  { method: "GET", path: "/api/auth/plan-status" },
+  { method: "GET", path: "/api/auth/turn-status" },
+];
+
+export function isMaxAuthRoute(method: string, pathname: string): boolean {
+  return MAX_AUTH_ROUTES.some((route) => route.method === method && route.path === pathname);
+}
+
 /** Returns false when this path is not an auth route the gateway implements. */
 export async function handleAuthHttp(
   req: IncomingMessage,

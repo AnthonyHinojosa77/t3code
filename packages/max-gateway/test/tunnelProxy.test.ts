@@ -13,7 +13,7 @@ import { openAuthStore, type AuthStore } from "../src/auth/store.ts";
 import { BearerTokenSource, sessionIssueArgs } from "../src/bearerToken.ts";
 import { startMiniCompanion, type RunningMiniCompanion } from "../src/miniCompanion.ts";
 import { maximusSessionOwnerAuth } from "../src/ownerAuth.ts";
-import { startTunnelServer, type RunningTunnelServer } from "../src/tunnelServer.ts";
+import { classifyPath, startTunnelServer, type RunningTunnelServer } from "../src/tunnelServer.ts";
 
 const SECRET = "task0-test-secret";
 const TOKEN = "scoped-bearer-token";
@@ -111,7 +111,16 @@ async function startUpstream(
         cookie: typeof req.headers.cookie === "string" ? req.headers.cookie : null,
         body,
       });
-      if (url.startsWith("/api/environment/auth/session")) {
+      if (url.startsWith("/api/auth/websocket-ticket") && req.method === "POST") {
+        const payload = JSON.stringify({ ticket: "upstream-ticket" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+        });
+        res.end(payload);
+        return;
+      }
+      if (url.startsWith("/api/auth/session")) {
         const payload = JSON.stringify({ authenticated: true });
         res.writeHead(200, {
           "content-type": "application/json",
@@ -168,7 +177,7 @@ async function startUpstream(
         });
         return;
       }
-      if (url.startsWith("/api/environment/upload")) {
+      if (url.startsWith("/__test/upload")) {
         res.writeHead(204);
         res.end();
         return;
@@ -326,12 +335,58 @@ function sendHttp(
   );
 }
 
+describe("classifyPath", () => {
+  it("owns only MAX's exact auth endpoints and proxies the rest of /api/auth", () => {
+    const owned: ReadonlyArray<readonly [string, string]> = [
+      ["POST", "/api/auth/register"],
+      ["POST", "/api/auth/login"],
+      ["POST", "/api/auth/logout"],
+      ["GET", "/api/auth/me"],
+      ["GET", "/api/auth/plan-status"],
+      ["GET", "/api/auth/turn-status"],
+      ["GET", "/api/billing/plans"],
+      ["GET", "/__max/anything"],
+    ];
+    for (const [method, pathname] of owned) {
+      expect(classifyPath(pathname, method), `${method} ${pathname}`).toBe("owned");
+    }
+    // T3's environment auth API (packages/contracts/src/environmentHttp.ts), plus the
+    // MAX paths under the wrong method, which MAX does not answer.
+    const proxied: ReadonlyArray<readonly [string, string]> = [
+      ["GET", "/api/auth/session"],
+      ["POST", "/api/auth/browser-session"],
+      ["POST", "/api/auth/websocket-ticket"],
+      ["POST", "/api/auth/websocket-ticket/terminal"],
+      ["POST", "/api/auth/pairing-token"],
+      ["GET", "/api/auth/pairing-links"],
+      ["POST", "/api/auth/pairing-links/revoke"],
+      ["GET", "/api/auth/clients"],
+      ["POST", "/api/auth/clients/revoke"],
+      ["POST", "/api/auth/clients/revoke-others"],
+      ["GET", "/api/auth"],
+      ["GET", "/api/auth/login"],
+      ["POST", "/api/auth/me"],
+      ["GET", "/api/providers/keys"],
+      ["GET", "/ws"],
+    ];
+    for (const [method, pathname] of proxied) {
+      expect(classifyPath(pathname, method), `${method} ${pathname}`).toBe("proxy");
+    }
+    expect(classifyPath("/__max/health")).toBe("health");
+    expect(classifyPath("/__max/tunnel")).toBe("tunnel");
+  });
+});
+
 describe("max gateway tunnel", () => {
   it("rejects an unauthenticated proxied request with 401", async () => {
     const stack = await startStack();
     try {
-      const missing = await sendHttp(`${stack.gateway.url}/api/environment/auth/session`);
+      const missing = await sendHttp(`${stack.gateway.url}/api/auth/session`);
       expect(missing.status).toBe(401);
+      const ticket = await sendHttp(`${stack.gateway.url}/api/auth/websocket-ticket`, {
+        method: "POST",
+      });
+      expect(ticket.status).toBe(401);
       const wrong = await sendHttp(`${stack.gateway.url}/attachments/file.bin`, {
         headers: { cookie: "maximus_session=not-the-owner" },
       });
@@ -374,7 +429,7 @@ describe("max gateway tunnel", () => {
       );
       expect(rejected).toBe(401);
       const started = Date.now();
-      const proxied = await sendHttp(`${stack.gateway.url}/api/environment/auth/session`, {
+      const proxied = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
         headers: ownerHeaders(stack.sessionToken),
       });
       expect(proxied.status).toBe(502);
@@ -388,7 +443,7 @@ describe("max gateway tunnel", () => {
   it("round-trips an owner session request and injects the scoped bearer token", async () => {
     const stack = await startStack();
     try {
-      const response = await sendHttp(`${stack.gateway.url}/api/environment/auth/session?probe=1`, {
+      const response = await sendHttp(`${stack.gateway.url}/api/auth/session?probe=1`, {
         headers: ownerHeaders(stack.sessionToken, { authorization: "Bearer intruder" }),
       });
       expect(response.status).toBe(200);
@@ -396,13 +451,13 @@ describe("max gateway tunnel", () => {
       expect(stack.upstream.requests).toHaveLength(1);
       const seen = stack.upstream.requests[0];
       expect(seen?.method).toBe("GET");
-      expect(seen?.url).toBe("/api/environment/auth/session?probe=1");
+      expect(seen?.url).toBe("/api/auth/session?probe=1");
       expect(seen?.authorization).toBe(`Bearer ${TOKEN}`);
       expect(seen?.cookie).toBeNull();
       await expect(stat(process.env.MAX_COMPANION_TOKEN_PATH ?? "")).rejects.toThrow();
 
       const upload = Buffer.from([0, 1, 2, 255, 10, 13]);
-      const posted = await sendHttp(`${stack.gateway.url}/api/environment/upload?name=a`, {
+      const posted = await sendHttp(`${stack.gateway.url}/__test/upload?name=a`, {
         method: "POST",
         headers: ownerHeaders(stack.sessionToken, { "content-type": "application/octet-stream" }),
         body: upload,
@@ -410,9 +465,64 @@ describe("max gateway tunnel", () => {
       expect(posted.status).toBe(204);
       const postedSeen = stack.upstream.requests[1];
       expect(postedSeen?.method).toBe("POST");
-      expect(postedSeen?.url).toBe("/api/environment/upload?name=a");
+      expect(postedSeen?.url).toBe("/__test/upload?name=a");
       expect(postedSeen?.authorization).toBe(`Bearer ${TOKEN}`);
       expect(postedSeen?.body.equals(upload)).toBe(true);
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("proxies T3 environment auth endpoints and keeps MAX's own auth endpoints", async () => {
+    const stack = await startStack();
+    try {
+      const ticket = await sendHttp(`${stack.gateway.url}/api/auth/websocket-ticket`, {
+        method: "POST",
+        headers: ownerHeaders(stack.sessionToken, { "content-type": "application/json" }),
+        body: Buffer.from("{}"),
+      });
+      expect(ticket.status).toBe(200);
+      expect(JSON.parse(ticket.body.toString("utf8"))).toEqual({ ticket: "upstream-ticket" });
+      const ticketSeen = stack.upstream.requests[0];
+      expect(ticketSeen?.method).toBe("POST");
+      expect(ticketSeen?.url).toBe("/api/auth/websocket-ticket");
+      expect(ticketSeen?.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(ticketSeen?.cookie).toBeNull();
+
+      for (const path of [
+        "/api/auth/websocket-ticket/terminal",
+        "/api/auth/pairing-links/revoke",
+        "/api/auth/clients/revoke",
+      ]) {
+        await sendHttp(`${stack.gateway.url}${path}`, {
+          method: "POST",
+          headers: ownerHeaders(stack.sessionToken),
+        });
+      }
+      await sendHttp(`${stack.gateway.url}/api/auth/clients`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(stack.upstream.requests.slice(1).map((request) => request.url)).toEqual([
+        "/api/auth/websocket-ticket/terminal",
+        "/api/auth/pairing-links/revoke",
+        "/api/auth/clients/revoke",
+        "/api/auth/clients",
+      ]);
+      expect(
+        stack.upstream.requests.every((request) => request.authorization === `Bearer ${TOKEN}`),
+      ).toBe(true);
+
+      const before = stack.upstream.requests.length;
+      const me = await sendHttp(`${stack.gateway.url}/api/auth/me`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(me.status).toBe(200);
+      expect(JSON.parse(me.body.toString("utf8"))).toHaveProperty("user");
+      const plan = await sendHttp(`${stack.gateway.url}/api/auth/plan-status`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(plan.status).toBe(200);
+      expect(stack.upstream.requests).toHaveLength(before);
     } finally {
       await stack.close();
     }
@@ -535,7 +645,7 @@ describe("max gateway tunnel", () => {
     const stack = await startStack({ connect: false });
     try {
       const started = Date.now();
-      const response = await sendHttp(`${stack.gateway.url}/api/environment/auth/session`, {
+      const response = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
         headers: ownerHeaders(stack.sessionToken),
       });
       const elapsed = Date.now() - started;

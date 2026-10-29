@@ -274,11 +274,11 @@ describe("personal mode auth", () => {
       const providers = await send(`${gateway.url}/api/providers/keys`, { headers: { cookie } });
       expect(providers.status).toBe(403);
 
-      const proxied = await send(`${gateway.url}/api/environment/auth/session`, {
+      const proxied = await send(`${gateway.url}/api/auth/session`, {
         headers: { cookie },
       });
       expect(proxied.status).toBe(502);
-      const missing = await send(`${gateway.url}/api/environment/auth/session`);
+      const missing = await send(`${gateway.url}/api/auth/session`);
       expect(missing.status).toBe(401);
 
       const loggedOut = await send(`${gateway.url}/api/auth/logout`, {
@@ -286,7 +286,7 @@ describe("personal mode auth", () => {
         headers: { cookie },
       });
       expect(loggedOut.status).toBe(200);
-      const afterLogout = await send(`${gateway.url}/api/environment/auth/session`, {
+      const afterLogout = await send(`${gateway.url}/api/auth/session`, {
         headers: { cookie },
       });
       expect(afterLogout.status).toBe(401);
@@ -297,7 +297,7 @@ describe("personal mode auth", () => {
       });
       const fresh = sessionCookie(again.setCookie);
       gateway.store.expireSession(decodeURIComponent(fresh.slice("maximus_session=".length)));
-      const expired = await send(`${gateway.url}/api/environment/auth/session`, {
+      const expired = await send(`${gateway.url}/api/auth/session`, {
         headers: { cookie: fresh },
       });
       expect(expired.status).toBe(401);
@@ -431,7 +431,7 @@ describe("personal mode auth", () => {
       expect(shell.body).toContain("MAX-SHELL");
       const escaped = await send(`${withDist.url}/%2e%2e/secret.txt`);
       expect(escaped.body).not.toContain("TOP-SECRET");
-      const api = await send(`${withDist.url}/api/environment/auth/session`);
+      const api = await send(`${withDist.url}/api/auth/session`);
       expect(api.status).toBe(401);
     } finally {
       await withDist.close();
