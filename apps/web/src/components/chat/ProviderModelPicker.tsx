@@ -75,6 +75,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
+  /** See `ModelPickerContent`; omitted, the picker behaves as it always has. */
+  selectionMode?: "single" | "council";
+  selectedCountByInstance?: ReadonlyMap<ProviderInstanceId, number>;
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -293,6 +296,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   if (!props.disabled) props.onToggleModel?.(instanceId, model);
                 },
               }
+            : {})}
+          {...(props.selectionMode ? { selectionMode: props.selectionMode } : {})}
+          {...(props.selectedCountByInstance
+            ? { selectedCountByInstance: props.selectedCountByInstance }
             : {})}
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}

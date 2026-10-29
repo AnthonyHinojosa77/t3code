@@ -10,7 +10,9 @@ import {
 } from "../../state/entities";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { SidebarInset } from "../ui/sidebar";
+import { EMPTY_COUNCIL_SELECTION } from "./councilSelection";
 import { MaxHeader } from "./MaxHeader";
+import { MaxPromptComposer } from "./MaxPromptComposer";
 import type { MaxMode } from "./maxMode";
 
 const primaryButtonClass =
@@ -21,22 +23,17 @@ const primaryButtonClass =
  * Council rounds have no backend yet, so this shows an empty state rather than a fake list.
  */
 export function MaxAppShell({ onModeChange }: { readonly onModeChange: (mode: MaxMode) => void }) {
+  const [councilSelection, setCouncilSelection] = useState(EMPTY_COUNCIL_SELECTION);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="max-scope flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         <MaxHeader mode="council" onModeChange={onModeChange} />
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 px-6 py-10 md:py-16">
-            <section aria-labelledby="max-council-heading">
-              <h1 id="max-council-heading" className="text-sm font-semibold">
-                Council
-              </h1>
-              <p className="mt-2 text-sm leading-relaxed text-(--max-muted)">
-                Council mode asks several models the same question and shows their answers side by
-                side. Asking the council is not available yet.
-              </p>
-            </section>
-            <AgentModeEntry onModeChange={onModeChange} />
+            <MaxPromptComposer
+              selection={councilSelection}
+              onSelectionChange={setCouncilSelection}
+            />
             <section aria-labelledby="max-rounds-heading">
               <h2 id="max-rounds-heading" className="text-sm font-semibold">
                 Council rounds
@@ -45,6 +42,7 @@ export function MaxAppShell({ onModeChange }: { readonly onModeChange: (mode: Ma
                 No council rounds yet. They will appear here.
               </p>
             </section>
+            <AgentModeEntry onModeChange={onModeChange} />
           </div>
         </div>
       </div>
