@@ -1,8 +1,8 @@
 # Railway setup for the T3 MAX tunnel (Task 0)
 
-This is a runbook, not a deploy. Nobody in this task signs in to Railway, installs the Railway CLI, or creates a project. Dashboard values are the source of truth for a new service. `railway.json` at the repo root is a reference copy only.
+This is a runbook, not a deploy. Nobody in this task signs in to Railway, installs the Railway CLI, or creates a project. `railway.json` at the repo root is applied to the service, so keep it and the dashboard in agreement.
 
-Checked 2026-10-29: [Using Config as Code](https://docs.railway.com/guides/config-as-code) says config-as-code is deprecated, existing `railway.json` files work until 2026-12-01, and new services cannot opt in. A new service will not take its settings from `railway.json`.
+Checked 2026-10-29: [Using Config as Code](https://docs.railway.com/guides/config-as-code) says config-as-code is deprecated, existing `railway.json` files work until 2026-12-01, and new services cannot opt in. Observed 2026-10-29 on service `max-gateway` (project `lucid-victory`): the first build used the Nixpacks builder that `railway.json` named (`Node.js v18.20.5`, then `Error: Cannot find module '/root/.cache/node/corepack/pnpm/12.14.0/bin/pnpm.cjs'` at `pnpm i --frozen-lockfile`). So `railway.json` is applied to this service despite that note.
 
 ## 1. Owner sign-in (Anthony only)
 
@@ -24,7 +24,7 @@ Do these in order. The service root is the repository root.
 
 Enter these on the service in the dashboard.
 
-- Builder: Railpack. That is Railway's builder for a new service. The `NIXPACKS` value in `railway.json` is reference only.
+- Builder: Railpack. `railway.json` sets `"builder": "RAILPACK"`, which the schema at `https://railway.com/railway.schema.json` accepts and marks experimental. The earlier `NIXPACKS` value caused the failed first build above.
 - Build command: `pnpm --filter @t3tools/web build && pnpm --filter @t3tools/max-gateway build`
 - Start command: `node --experimental-strip-types packages/max-gateway/src/start.ts`
 - Healthcheck path: `/__max/health`
@@ -39,9 +39,9 @@ The web build is required. `start.ts` serves `apps/web/dist` (or `MAX_WEB_DIST` 
 
 The start command needs Node's `--experimental-strip-types`. Root `package.json` `engines.node` is `26.12.1`.
 
-For this new service, set a Railway variable `RAILPACK_NODE_VERSION` to `26.12.1`. [Railpack's Node docs](https://railpack.com/languages/node/) resolve the version in this order: `RAILPACK_NODE_VERSION`, then `devEngines.runtime` in `package.json`, then `engines.node`, then `.nvmrc`, `.node-version`, `mise.toml` or `.tool-versions`, otherwise `lts`. The root manifest already has the exact `engines.node` value, so Railpack still sees `26.12.1` if the variable is left unset. [Railpack package resolution](https://railpack.com/architecture/package-resolution/) says an exact version pins, and a range is collapsed to the major before Mise picks a release. Whether the Mise registry serving that build has Node `26.12.1` is unverified until the build log prints `node --version`.
+Set the Railway variable `RAILPACK_NODE_VERSION` to `26.12.1` (already set on `max-gateway`). [Railpack's Node docs](https://railpack.com/languages/node/) resolve the version in this order: `RAILPACK_NODE_VERSION`, then `devEngines.runtime` in `package.json`, then `engines.node`, then `.nvmrc`, `.node-version`, `mise.toml` or `.tool-versions`, otherwise `lts`. The root manifest already has the exact `engines.node` value, so Railpack still sees `26.12.1` if the variable is left unset. [Railpack package resolution](https://railpack.com/architecture/package-resolution/) says an exact version pins, and a range is collapsed to the major before Mise picks a release. Whether the Mise registry serving that build has Node `26.12.1` is unverified until the build log prints `node --version`.
 
-Nixpacks is not the path for this new service. [Nixpacks' Node provider](https://nixpacks.com/docs/providers/node) accepts a major version only (`NIXPACKS_NODE_VERSION`, `engines.node`, or `.nvmrc`), and its published major list does not include 26. Do not expect the `railway.json` Nixpacks builder to install `26.12.1`.
+Nixpacks is not the path for this new service. [Nixpacks' Node provider](https://nixpacks.com/docs/providers/node) accepts a major version only (`NIXPACKS_NODE_VERSION`, `engines.node`, or `.nvmrc`), and its published major list does not include 26. The first build on this service ran Nixpacks from the old `railway.json` and got Node `18.20.5`, which is why the builder is now Railpack.
 
 ### 2.4 Volume at `/data`
 
@@ -53,7 +53,7 @@ railway volume add --mount-path /data
 
 Dashboard path: create a volume, connect it to this service, set the mount path to `/data`. [Using Volumes](https://docs.railway.com/guides/volumes) describes the dashboard. [railway volume](https://docs.railway.com/cli/volume) documents the command above.
 
-`railway.json` contains `deploy.requiredMountPath` set to `/data`. The schema at `https://railway.com/railway.schema.json` (fetched from `https://backboard.railway.app/railway.schema.json`) describes that field only as "Required mount path for the deployment". Whether setting the field provisions a volume was not observed. Do not treat the field as the create step. Config-as-code is also not applied to a new service.
+`railway.json` contains `deploy.requiredMountPath` set to `/data`. The schema at `https://railway.com/railway.schema.json` (fetched from `https://backboard.railway.app/railway.schema.json`) describes that field only as "Required mount path for the deployment". Whether setting the field provisions a volume was not observed. Do not treat the field as the create step. `railway.json` is applied to this service, but the volume still has to be created.
 
 The account database is the file `max.sqlite` inside that mount. `RAILWAY_VOLUME_MOUNT_PATH` is the directory (`/data`), and the gateway joins `max.sqlite` onto it. `MAX_DB_PATH` overrides that with a full file path. The companion's token file still lives on the Mini, under `T3CODE_HOME` or `~/.t3`, not on this volume.
 
