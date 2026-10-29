@@ -32,9 +32,12 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
+    "bcryptjs": "catalog:",
+    "stripe": "catalog:",
     "ws": "catalog:"
   },
   "devDependencies": {
+    "@types/bcryptjs": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "typescript": "catalog:",

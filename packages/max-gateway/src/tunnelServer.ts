@@ -5,7 +5,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
+import type { AuthStore } from "./auth/store.ts";
+import { handleOwnedHttp } from "./ownedRoutes.ts";
 import type { OwnerRequestCheck } from "./ownerAuth.ts";
+import { tryServeStatic } from "./staticApp.ts";
 import {
   FrameDecoder,
   FrameType,
@@ -73,6 +76,16 @@ export interface TunnelServerOptions {
   readonly idleTimeoutMs?: number;
   readonly responseTimeoutMs?: number;
   readonly upgradeTimeoutMs?: number;
+  /** Account database. Auth routes 404 when this is missing. */
+  readonly authStore?: AuthStore | null;
+  /** Defaults to true so a forgotten flag stays locked to the owner. */
+  readonly personalMode?: boolean;
+  readonly ownerEmail?: string | null;
+  /**
+   * Built web app directory. Null or omitted keeps the Task 0 behavior:
+   * page loads are proxied, and nothing is read from `apps/web/dist`.
+   */
+  readonly webDist?: string | null;
 }
 
 export interface RunningTunnelServer {
@@ -380,9 +393,38 @@ export async function startTunnelServer(
       res.end(body);
       return;
     }
-    if (kind !== "proxy") {
-      req.resume();
-      sendPlain(res, 404, "not found\n");
+    const personalMode = options.personalMode ?? true;
+    try {
+      const served = await tryServeStatic(req, res, options.webDist ?? null, url.pathname);
+      if (served) return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "static file error";
+      process.stderr.write(`static file error: ${message}\n`);
+      if (!res.headersSent) sendPlain(res, 500, "static file error\n");
+      return;
+    }
+    const providerLocked =
+      personalMode &&
+      (url.pathname === "/api/providers" || url.pathname.startsWith("/api/providers/"));
+    if (kind !== "proxy" || providerLocked) {
+      try {
+        const handled = await handleOwnedHttp(req, res, url, {
+          authStore: options.authStore ?? null,
+          personalMode,
+          ownerEmail: options.ownerEmail ?? null,
+        });
+        if (!handled) {
+          req.resume();
+          sendPlain(res, 404, "not found\n");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "internal error";
+        process.stderr.write(`owned route error: ${message}\n`);
+        if (!res.headersSent) {
+          req.resume();
+          sendPlain(res, 500, "internal error\n");
+        }
+      }
       return;
     }
     if (!(await options.isOwnerRequest(req))) {

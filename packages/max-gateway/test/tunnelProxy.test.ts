@@ -9,6 +9,7 @@ import path from "node:path";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { openAuthStore, type AuthStore } from "../src/auth/store.ts";
 import { BearerTokenSource, sessionIssueArgs } from "../src/bearerToken.ts";
 import { startMiniCompanion, type RunningMiniCompanion } from "../src/miniCompanion.ts";
 import { maximusSessionOwnerAuth } from "../src/ownerAuth.ts";
@@ -16,7 +17,6 @@ import { startTunnelServer, type RunningTunnelServer } from "../src/tunnelServer
 
 const SECRET = "task0-test-secret";
 const TOKEN = "scoped-bearer-token";
-const OWNER = "owner-ok";
 
 beforeEach(() => {
   vi.useRealTimers();
@@ -217,6 +217,7 @@ async function startUpstream(
 interface Stack {
   readonly gateway: RunningTunnelServer;
   readonly upstream: Upstream;
+  readonly sessionToken: string;
   readonly companion?: RunningMiniCompanion;
   close: () => Promise<void>;
 }
@@ -231,15 +232,26 @@ async function startStack(options?: {
     options?.binary ?? Buffer.alloc(0),
     options?.script ?? "default",
   );
+  const tokenDir = await mkdtemp(path.join(tmpdir(), "t3mc-token-"));
+  const auth: AuthStore = openAuthStore(path.join(tokenDir, "auth.sqlite"));
+  const owner = auth.insertUser({
+    email: "owner@example.com",
+    passwordHash: "task0-not-a-login",
+    displayName: "Owner",
+  });
+  const session = auth.createSession(owner.id);
   const gateway = await startTunnelServer({
     host: "127.0.0.1",
     tunnelSecret: SECRET,
-    isOwnerRequest: maximusSessionOwnerAuth((session) => session === OWNER),
+    personalMode: true,
+    ownerEmail: "owner@example.com",
+    webDist: null,
+    authStore: auth,
+    isOwnerRequest: maximusSessionOwnerAuth((token) => auth.readSession(token) !== null),
     ...(options?.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
   });
   const previousToken = process.env.MAX_COMPANION_BEARER_TOKEN;
   const previousPath = process.env.MAX_COMPANION_TOKEN_PATH;
-  const tokenDir = await mkdtemp(path.join(tmpdir(), "t3mc-token-"));
   process.env.MAX_COMPANION_BEARER_TOKEN = TOKEN;
   process.env.MAX_COMPANION_TOKEN_PATH = path.join(tokenDir, "should-not-write.json");
   let companion: RunningMiniCompanion | undefined;
@@ -255,6 +267,7 @@ async function startStack(options?: {
   return {
     gateway,
     upstream,
+    sessionToken: session.token,
     ...(companion ? { companion } : {}),
     close: async () => {
       if (previousToken === undefined) delete process.env.MAX_COMPANION_BEARER_TOKEN;
@@ -266,14 +279,18 @@ async function startStack(options?: {
         await companion.close();
       }
       await gateway.close();
+      auth.close();
       await upstream.close();
       await rm(tokenDir, { recursive: true, force: true });
     },
   };
 }
 
-function ownerHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { cookie: `maximus_session=${OWNER}`, ...extra };
+function ownerHeaders(
+  sessionToken: string,
+  extra?: Record<string, string>,
+): Record<string, string> {
+  return { cookie: `maximus_session=${sessionToken}`, ...extra };
 }
 
 function sendHttp(
@@ -321,12 +338,16 @@ describe("max gateway tunnel", () => {
       expect(wrong.status).toBe(401);
       expect(stack.upstream.requests).toHaveLength(0);
 
-      const owned = await sendHttp(`${stack.gateway.url}/api/auth/me`, { headers: ownerHeaders() });
-      const billing = await sendHttp(`${stack.gateway.url}/api/billing/plans`, {
-        headers: ownerHeaders(),
+      // These routes are gateway-owned now. A real session reaches /api/auth/me.
+      // Personal mode rejects billing before the proxy. Neither is forwarded.
+      const owned = await sendHttp(`${stack.gateway.url}/api/auth/me`, {
+        headers: ownerHeaders(stack.sessionToken),
       });
-      expect(owned.status).toBe(404);
-      expect(billing.status).toBe(404);
+      const billing = await sendHttp(`${stack.gateway.url}/api/billing/plans`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(owned.status).toBe(200);
+      expect(billing.status).toBe(403);
       expect(stack.upstream.requests).toHaveLength(0);
     } finally {
       await stack.close();
@@ -354,7 +375,7 @@ describe("max gateway tunnel", () => {
       expect(rejected).toBe(401);
       const started = Date.now();
       const proxied = await sendHttp(`${stack.gateway.url}/api/environment/auth/session`, {
-        headers: ownerHeaders(),
+        headers: ownerHeaders(stack.sessionToken),
       });
       expect(proxied.status).toBe(502);
       expect(Date.now() - started).toBeLessThan(500);
@@ -368,7 +389,7 @@ describe("max gateway tunnel", () => {
     const stack = await startStack();
     try {
       const response = await sendHttp(`${stack.gateway.url}/api/environment/auth/session?probe=1`, {
-        headers: ownerHeaders({ authorization: "Bearer intruder" }),
+        headers: ownerHeaders(stack.sessionToken, { authorization: "Bearer intruder" }),
       });
       expect(response.status).toBe(200);
       expect(JSON.parse(response.body.toString("utf8"))).toEqual({ authenticated: true });
@@ -383,7 +404,7 @@ describe("max gateway tunnel", () => {
       const upload = Buffer.from([0, 1, 2, 255, 10, 13]);
       const posted = await sendHttp(`${stack.gateway.url}/api/environment/upload?name=a`, {
         method: "POST",
-        headers: ownerHeaders({ "content-type": "application/octet-stream" }),
+        headers: ownerHeaders(stack.sessionToken, { "content-type": "application/octet-stream" }),
         body: upload,
       });
       expect(posted.status).toBe(204);
@@ -401,7 +422,7 @@ describe("max gateway tunnel", () => {
     const stack = await startStack();
     try {
       const client = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-1`, {
-        headers: ownerHeaders(),
+        headers: ownerHeaders(stack.sessionToken),
       });
       const received: CapturedWs[] = [];
       client.on("message", (data, isBinary) => {
@@ -457,7 +478,7 @@ describe("max gateway tunnel", () => {
     const stack = await startStack({ binary });
     try {
       const response = await withTimeout(
-        openGet(`${stack.gateway.url}/attachments/file.bin`, ownerHeaders()),
+        openGet(`${stack.gateway.url}/attachments/file.bin`, ownerHeaders(stack.sessionToken)),
         3_000,
         "attachment response headers",
       );
@@ -480,7 +501,7 @@ describe("max gateway tunnel", () => {
     const stack = await startStack({ idleTimeoutMs: 250, script: "drip" });
     try {
       const response = await sendHttp(`${stack.gateway.url}/__test/drip`, {
-        headers: ownerHeaders(),
+        headers: ownerHeaders(stack.sessionToken),
       });
       expect(response.status).toBe(200);
       expect(response.body.toString("utf8")).toBe("abcdefgh");
@@ -494,7 +515,7 @@ describe("max gateway tunnel", () => {
     try {
       const started = Date.now();
       const response = await sendHttp(`${stack.gateway.url}/__test/stall`, {
-        headers: ownerHeaders(),
+        headers: ownerHeaders(stack.sessionToken),
       });
       const elapsed = Date.now() - started;
       expect(response.status).toBe(504);
@@ -515,7 +536,7 @@ describe("max gateway tunnel", () => {
     try {
       const started = Date.now();
       const response = await sendHttp(`${stack.gateway.url}/api/environment/auth/session`, {
-        headers: ownerHeaders(),
+        headers: ownerHeaders(stack.sessionToken),
       });
       const elapsed = Date.now() - started;
       expect(response.status).toBe(502);
@@ -523,7 +544,7 @@ describe("max gateway tunnel", () => {
       const upgrade = await withTimeout(
         new Promise<number>((resolve, reject) => {
           const ws = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-1`, {
-            headers: ownerHeaders(),
+            headers: ownerHeaders(stack.sessionToken),
           });
           ws.on("unexpected-response", (_req, res: IncomingMessage) => {
             res.resume();

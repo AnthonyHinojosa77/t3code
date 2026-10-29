@@ -1,15 +1,19 @@
+// @effect-diagnostics nodeBuiltinImport:off - Startup opens the local account file and checks the web build directory.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { isPersonalMode, readOwnerEmail, warnIfOwnerEmailMissing } from "./auth/personalMode.ts";
+import { openAuthStore, resolveAuthDbPath } from "./auth/store.ts";
 import { maximusSessionOwnerAuth } from "./ownerAuth.ts";
+import { defaultWebDist } from "./staticApp.ts";
 import { startTunnelServer } from "./tunnelServer.ts";
 
-function allowListedSessions(raw: string | undefined): Set<string> {
-  return new Set(
-    (raw ?? "")
-      .split(",")
-      .map((session) => session.trim())
-      .filter((session) => session.length > 0),
-  );
+function resolveWebDist(): string | null {
+  const configured = process.env.MAX_WEB_DIST?.trim();
+  const candidate =
+    configured && configured.length > 0 ? path.resolve(configured) : defaultWebDist();
+  return existsSync(candidate) ? candidate : null;
 }
 
 export async function main(): Promise<void> {
@@ -23,13 +27,18 @@ export async function main(): Promise<void> {
     process.stderr.write("PORT must be a positive integer\n");
     process.exit(1);
   }
-  // Task 0 stand-in for MAX login. Task 1 replaces this with maximus_session issuance.
-  const allowed = allowListedSessions(process.env.MAX_OWNER_SESSION_ALLOWLIST);
+  warnIfOwnerEmailMissing();
+  const authStore = openAuthStore(resolveAuthDbPath());
+  authStore.pruneExpired();
   const server = await startTunnelServer({
     host: process.env.HOST ?? "0.0.0.0",
     port,
     tunnelSecret,
-    isOwnerRequest: maximusSessionOwnerAuth((session) => allowed.has(session)),
+    authStore,
+    personalMode: isPersonalMode(),
+    ownerEmail: readOwnerEmail(),
+    webDist: resolveWebDist(),
+    isOwnerRequest: maximusSessionOwnerAuth((session) => authStore.readSession(session) !== null),
   });
   process.stderr.write(`max-gateway listening on ${server.port}\n`);
 }

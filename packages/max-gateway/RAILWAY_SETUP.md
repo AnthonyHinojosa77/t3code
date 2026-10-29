@@ -18,8 +18,7 @@ Do these in order. The service root is the repository root.
 ### 2.1 Create the project and service
 
 1. Create a Railway project whose service deploys GitHub repo `AnthonyHinojosa77/t3code`.
-2. Set the service branch to `feat/t3mc-task0-tunnel`.
-3. When later Task 0 work has merged, repoint that service at the branch the merge landed on. Do that as the work merges. Do not deploy from `main` for this proof.
+2. Set the service branch to the stacked branch that holds this gateway. Task 1's branch is `feat/t3mc-task1-auth-pwa`, based on `feat/model-picker-usage-limits`. Repoint the service as that work merges. Do not deploy from `main` for this proof. Do not deploy as part of Task 1.
 
 ### 2.2 Builder, build, and start
 
@@ -32,9 +31,9 @@ Enter these on the service in the dashboard.
 - Healthcheck timeout: 30 seconds
 - Restart: on failure, 3 retries (`railway.json` uses `ON_FAILURE` and `restartPolicyMaxRetries` 3)
 
-`pnpm --filter @t3tools/max-gateway build` is `tsc --noEmit`. It does not emit JavaScript. The start command runs the TypeScript file with Node's type stripper. That local typecheck was run; see the PR validation.
+`pnpm --filter @t3tools/max-gateway build` is `tsc --noEmit`. It does not emit JavaScript. The start command runs the TypeScript file with Node's type stripper.
 
-The `apps/web` half of the build command was not run on the build machine (disk was too full). Whether that web build succeeds on Railway is unverified. `packages/max-gateway/src/start.ts` does not serve `apps/web/dist`. The phone sees the responses from T3 on the Mac Mini, proxied through this gateway. The Railway web build is not what the phone renders.
+The web build is required. `start.ts` serves `apps/web/dist` (or `MAX_WEB_DIST` when that directory exists) for the login shell and other non-API pages. A real file is served as-is. An unknown non-API page falls back to `index.html`. `/api/auth/*`, `/api/billing/*`, and `/__max/*` stay on the gateway. Everything else, including `/api/council/*` and `/ws`, is still proxied to the Mini after a valid `maximus_session`. If the dist directory is missing, the gateway proxies page loads too, which is only the fallback for local tests. A Railway deploy without the web build will not show the MAX login page.
 
 ### 2.3 Node version
 
@@ -56,7 +55,7 @@ Dashboard path: create a volume, connect it to this service, set the mount path 
 
 `railway.json` contains `deploy.requiredMountPath` set to `/data`. The schema at `https://railway.com/railway.schema.json` (fetched from `https://backboard.railway.app/railway.schema.json`) describes that field only as "Required mount path for the deployment". Whether setting the field provisions a volume was not observed. Do not treat the field as the create step. Config-as-code is also not applied to a new service.
 
-Task 0 gateway code does not read or write `/data`. The companion's token file lives on the Mini, under `T3CODE_HOME` or `~/.t3`. Attach the volume anyway; the plan calls for it.
+The account database is the file `max.sqlite` inside that mount. `RAILWAY_VOLUME_MOUNT_PATH` is the directory (`/data`), and the gateway joins `max.sqlite` onto it. `MAX_DB_PATH` overrides that with a full file path. The companion's token file still lives on the Mini, under `T3CODE_HOME` or `~/.t3`, not on this volume.
 
 ### 2.5 Environment variables
 
@@ -64,12 +63,27 @@ Names only. Values stay empty in git. The lists match `packages/max-gateway/.env
 
 Gateway, on the Railway service:
 
-| Name                          | Role                                                                                                                                            |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAX_TUNNEL_SECRET`           | Required. Shared with the Mini. See 2.6.                                                                                                        |
-| `PORT`                        | Leave unset. Railway injects it. `start.ts` uses it, and falls back to `8080` only when it is absent. It must be a positive integer.            |
-| `HOST`                        | Optional. `start.ts` defaults to `0.0.0.0`, which is what Railway's proxy needs.                                                                |
-| `MAX_OWNER_SESSION_ALLOWLIST` | Task 0 stand-in for MAX login. Comma-separated `maximus_session` cookie values. Empty means every proxied request is 401. Task 1 replaces this. |
+| Name                         | Role                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAX_TUNNEL_SECRET`          | Required. Shared with the Mini. See 2.6.                                                                                                    |
+| `PORT`                       | Leave unset. Railway injects it. `start.ts` uses it, and falls back to `8080` only when it is absent. It must be a positive integer.        |
+| `HOST`                       | Optional. `start.ts` defaults to `0.0.0.0`, which is what Railway's proxy needs.                                                            |
+| `OWNER_EMAIL`                | Personal mode allows only this address, compared case-insensitively. If it is unset, nobody can register or log in.                         |
+| `MAX_PERSONAL_MODE`          | Optional. Unset or any value other than exactly `false` keeps personal mode on. `false` opens registration and billing.                     |
+| `MAX_DB_PATH`                | Optional file path for the SQLite account database. Unset uses `$RAILWAY_VOLUME_MOUNT_PATH/max.sqlite`, or `/data/max.sqlite`.              |
+| `MAX_WEB_DIST`               | Optional directory of the built web app. Unset uses `apps/web/dist` from the repo layout. A missing directory means page loads are proxied. |
+| `FRONTEND_URL`               | Optional. Stripe success and cancel redirects. Default `http://localhost:5173`.                                                             |
+| `STRIPE_SECRET_KEY`          | Used only when personal mode is off and a checkout or portal route runs. Empty in personal mode.                                            |
+| `STRIPE_WEBHOOK_SECRET`      | Named for a later webhook route. That route is not ported in Task 1.                                                                        |
+| `STRIPE_PRICE_ALPHA`         | Legacy alpha monthly price id.                                                                                                              |
+| `STRIPE_PRICE_ALPHA_MONTHLY` | Alpha monthly price id.                                                                                                                     |
+| `STRIPE_PRICE_ALPHA_YEARLY`  | Alpha yearly price id.                                                                                                                      |
+| `STRIPE_PRICE_OMEGA_MONTHLY` | Omega monthly price id. Omega has no yearly price.                                                                                          |
+| `STRIPE_PRICE_SIGMA_MONTHLY` | Sigma monthly price id.                                                                                                                     |
+| `STRIPE_PRICE_SIGMA_YEARLY`  | Sigma yearly price id.                                                                                                                      |
+| `STRIPE_PRICE_CREDITS_20`    | Credit pack price id.                                                                                                                       |
+| `STRIPE_PRICE_CREDITS_50`    | Credit pack price id.                                                                                                                       |
+| `STRIPE_PRICE_CREDITS_100`   | Credit pack price id.                                                                                                                       |
 
 Mac Mini companion. Run this on the Mini, not on Railway. Same secret as the gateway.
 
@@ -116,7 +130,7 @@ The process logs `max companion tunnel connected` on success. It does not log th
 This check is not done by the PR. After the service is healthy and the companion log says the tunnel is connected:
 
 1. On a phone, open the Railway HTTPS URL.
-2. Sign-in stand-in: Task 1 is what issues a `maximus_session` cookie. Until that exists, a normal MAX login will not pass this gateway. A proxied request is allowed only when that cookie's value is listed in `MAX_OWNER_SESSION_ALLOWLIST`. Getting a real cookie into the phone is an owner step at live time, not part of this PR.
+2. Sign in with `OWNER_EMAIL` and that account's password. The gateway sets the `maximus_session` cookie. Personal mode rejects every other address. This live check is still pending the owner's Railway sign-in. It is not part of the Task 1 PR.
 3. Confirm providers and usage are visible. Those pages are served by T3 on the Mini and proxied. Unverified until this check is run.
 4. Confirm an attachment round-trip: upload a file and download it back through the proxied app. Unverified until this check is run.
 
