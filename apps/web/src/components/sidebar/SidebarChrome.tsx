@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, UsersRoundIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -24,6 +24,7 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { writeMaxMode } from "../max/maxMode";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -193,6 +194,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigateToMainApp();
   };
 
+  // MAX: the way back to the council home from any agent thread.
+  const handleCouncilClick = () => {
+    closeMobileSidebar();
+    writeMaxMode("council");
+    void navigate({ to: "/" });
+  };
+
   return (
     <SidebarMenu className="flex-row items-center">
       {isOnUtilityPage ? (
@@ -204,6 +212,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          <SidebarUtilityItem
+            icon={<UsersRoundIcon />}
+            label="Council"
+            onClick={handleCouncilClick}
+          />
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"

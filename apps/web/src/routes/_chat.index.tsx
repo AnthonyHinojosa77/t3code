@@ -8,6 +8,8 @@ import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { HostedEmptyState } from "../components/HostedEmptyState";
+import { MaxAppShell } from "../components/max/MaxAppShell";
+import { resolveMaxIndexView, useMaxMode } from "../components/max/maxMode";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
@@ -23,12 +25,17 @@ import { useEnvironments } from "../state/environments";
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments, isReady } = useEnvironments();
+  const [maxMode, setMaxMode] = useMaxMode();
 
-  if (authGateState.status === "hosted-static") {
-    if (!isReady) return null;
-    if (environments.length === 0) return <HostedEmptyState />;
-  }
-
+  const view = resolveMaxIndexView({
+    mode: maxMode,
+    hostedStatic: authGateState.status === "hosted-static",
+    environmentsReady: isReady,
+    environmentCount: environments.length,
+  });
+  if (view === "pending") return null;
+  if (view === "hosted-empty") return <HostedEmptyState />;
+  if (view === "council") return <MaxAppShell onModeChange={setMaxMode} />;
   return <IndexDraftLanding />;
 }
 
