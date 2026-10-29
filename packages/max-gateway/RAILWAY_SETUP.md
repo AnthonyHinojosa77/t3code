@@ -33,7 +33,7 @@ Enter these on the service in the dashboard.
 
 `pnpm --filter @t3tools/max-gateway build` is `tsc --noEmit`. It does not emit JavaScript. The start command runs the TypeScript file with Node's type stripper.
 
-The web build is required. `start.ts` serves `apps/web/dist` (or `MAX_WEB_DIST` when that directory exists) for the login shell and other non-API pages. A real file is served as-is. An unknown non-API page falls back to `index.html`. `/api/auth/*`, `/api/billing/*`, and `/__max/*` stay on the gateway. Everything else, including `/api/council/*` and `/ws`, is still proxied to the Mini after a valid `maximus_session`. If the dist directory is missing, the gateway proxies page loads too, which is only the fallback for local tests. A Railway deploy without the web build will not show the MAX login page.
+The web build is required. `start.ts` serves `apps/web/dist` (or `MAX_WEB_DIST` when that directory exists) for the login shell and other non-API pages. A real file is served as-is. An unknown non-API page falls back to `index.html`. MAX's own auth endpoints (`POST /api/auth/register`, `login`, `logout`; `GET /api/auth/me`, `plan-status`, `turn-status`), `/api/billing/*`, and `/__max/*` stay on the gateway. Everything else, including T3's environment auth API under `/api/auth/*` (`/api/auth/session`, `websocket-ticket`, pairing, clients), `/api/council/*` and `/ws`, is still proxied to the Mini after a valid `maximus_session`. If the dist directory is missing, the gateway proxies page loads too, which is only the fallback for local tests. A Railway deploy without the web build will not show the MAX login page.
 
 ### 2.3 Node version
 

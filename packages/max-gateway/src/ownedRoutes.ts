@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owned routes answer the Node request the gateway already accepted.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { handleAuthHttp, type AuthHttpContext } from "./auth/http.ts";
+import { handleAuthHttp, isMaxAuthRoute, type AuthHttpContext } from "./auth/http.ts";
 import type { AuthStore } from "./auth/store.ts";
 import { handleBillingHttp } from "./billing/http.ts";
 import { sendJson } from "./httpUtil.ts";
@@ -19,10 +19,6 @@ function isProviderPath(pathname: string): boolean {
 
 function isBillingPath(pathname: string): boolean {
   return pathname === "/api/billing" || pathname.startsWith("/api/billing/");
-}
-
-function isAuthPath(pathname: string): boolean {
-  return pathname === "/api/auth" || pathname.startsWith("/api/auth/");
 }
 
 /**
@@ -50,7 +46,7 @@ export async function handleOwnedHttp(
     if (!ctx.authStore) return false;
     return handleBillingHttp(req, res, url, ctx.authStore);
   }
-  if (isAuthPath(url.pathname)) {
+  if (isMaxAuthRoute(req.method ?? "GET", url.pathname)) {
     if (!ctx.authStore) return false;
     const auth: AuthHttpContext = {
       authStore: ctx.authStore,
