@@ -8,6 +8,7 @@ import {
   parseMaxMode,
   readMaxMode,
   resolveMaxIndexView,
+  returnToCouncil,
   writeMaxMode,
 } from "./maxMode";
 
@@ -100,5 +101,17 @@ describe("resolveMaxIndexView", () => {
         environmentCount: 0,
       }),
     ).toBe("council");
+  });
+});
+
+describe("returnToCouncil", () => {
+  it("stores council mode before it navigates home", () => {
+    writeMaxMode("agent");
+    const seenAtNavigation: string[] = [];
+    returnToCouncil(() => {
+      seenAtNavigation.push(readMaxMode());
+    });
+    expect(seenAtNavigation).toEqual(["council"]);
+    expect(readMaxMode()).toBe("council");
   });
 });
