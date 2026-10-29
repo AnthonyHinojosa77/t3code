@@ -135,6 +135,17 @@ function upstreamHeaders(
   return out;
 }
 
+/**
+ * A browser close with no status arrives as 1005, and an abnormal one as 1006. `ws` throws
+ * on those (and on 1004), which would take the whole tunnel down, so they become 1000.
+ */
+function sendableCloseCode(code: number): number {
+  const valid =
+    (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) ||
+    (code >= 3000 && code <= 4999);
+  return valid ? code : 1000;
+}
+
 function isAnonymousRequest(headers: HeaderMap): boolean {
   return Object.entries(headers).some(
     ([name, value]) => name.toLowerCase() === ANONYMOUS_REQUEST_HEADER && value === "1",
@@ -240,7 +251,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
       const stream = streams.get(frame.streamId);
       const close = parseJsonPayload<WsCloseFrame>(frame.payload);
       streams.delete(frame.streamId);
-      if (stream?.kind === "ws") stream.socket?.close(close.code || 1000, close.reason);
+      if (stream?.kind === "ws") stream.socket?.close(sendableCloseCode(close.code), close.reason);
     }
   }
 
@@ -310,10 +321,27 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
   function openWs(streamId: number, request: WsOpenFrame): void {
     const stream: LiveWs = { kind: "ws", socket: null, pending: [], open: false };
     streams.set(streamId, stream);
+    void finishWs(streamId, stream, request);
+  }
+
+  async function finishWs(streamId: number, stream: LiveWs, request: WsOpenFrame): Promise<void> {
+    // Sockets are never public bootstrap, so the upgrade always carries the bearer. The
+    // browser's primary socket has no wsTicket, and T3 then authenticates the bearer header.
+    let token: string;
+    try {
+      token = await tokens.getToken();
+    } catch {
+      if (streams.get(streamId) !== stream) return;
+      streams.delete(streamId);
+      send(streamId, FrameType.wsOpenResult, jsonBuffer({ ok: false }));
+      return;
+    }
+    if (streams.get(streamId) !== stream) return;
     const wsOptions = {
       perMessageDeflate: false,
       handshakeTimeout: 10_000,
       maxPayload: 16 * 1024 * 1024,
+      headers: { authorization: `Bearer ${token}` },
     } as const;
     const upstream =
       request.protocols.length > 0
