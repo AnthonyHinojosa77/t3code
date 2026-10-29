@@ -15,6 +15,17 @@ export const MAX_FRAME_PAYLOAD = 8 * 1024 * 1024;
  */
 export const ANONYMOUS_REQUEST_HEADER = "x-max-anonymous";
 
+/**
+ * Close codes received from the far end (1005 no status, 1006 abnormal, 1004) make `ws`
+ * throw in `close()`, which would take the tunnel down. Both ends forward them as 1000.
+ */
+export function sendableCloseCode(code: number): number {
+  const valid =
+    (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) ||
+    (code >= 3000 && code <= 4999);
+  return valid ? code : 1000;
+}
+
 export const FrameType = {
   httpRequest: 1,
   httpRequestChunk: 2,

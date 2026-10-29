@@ -18,6 +18,7 @@ import {
   jsonBuffer,
   parseJsonPayload,
   sendFrames,
+  sendableCloseCode,
   type HttpRequestFrame,
   type HttpResponseHeadFrame,
   type WsCloseFrame,
@@ -133,17 +134,6 @@ function upstreamHeaders(
   out.host = host;
   if (token !== null) out.authorization = `Bearer ${token}`;
   return out;
-}
-
-/**
- * A browser close with no status arrives as 1005, and an abnormal one as 1006. `ws` throws
- * on those (and on 1004), which would take the whole tunnel down, so they become 1000.
- */
-function sendableCloseCode(code: number): number {
-  const valid =
-    (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) ||
-    (code >= 3000 && code <= 4999);
-  return valid ? code : 1000;
 }
 
 function isAnonymousRequest(headers: HeaderMap): boolean {

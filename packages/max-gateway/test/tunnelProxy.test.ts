@@ -231,6 +231,11 @@ async function startUpstream(
       return;
     }
     sockets.handleUpgrade(req, socket, head, (ws) => {
+      if (req.url?.includes("terminate=1")) {
+        // An abnormal drop, as when T3 restarts: no close frame, so the code is 1006.
+        ws.send("upstream-hello", () => ws.terminate());
+        return;
+      }
       ws.send("upstream-hello");
       ws.send(Buffer.from([9, 8, 7]));
       ws.on("message", (data, isBinary) => {
@@ -703,6 +708,46 @@ describe("max gateway tunnel", () => {
           ?.authorization,
       ).toBe(`Bearer ${TOKEN}`);
       ticketed.close();
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("survives an upstream socket that drops without a close frame", async () => {
+    const stack = await startStack();
+    try {
+      const dropped = new WebSocket(
+        `ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-3&terminate=1`,
+        { headers: ownerHeaders(stack.sessionToken) },
+      );
+      const closeCode = await withTimeout(
+        new Promise<number>((resolve, reject) => {
+          dropped.once("close", (code) => resolve(code));
+          dropped.once("error", reject);
+        }),
+        3_000,
+        "dropped websocket close",
+      );
+      expect(closeCode).toBe(1000);
+
+      const next = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-4`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          next.once("message", (data) => {
+            if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
+            else reject(new Error("unexpected first message"));
+          });
+          next.once("close", (code, reason) =>
+            reject(new Error(`closed with ${code} ${reason.toString()}`)),
+          );
+          next.once("error", reject);
+        }),
+        3_000,
+        "websocket after an abnormal drop",
+      );
+      next.close(1000);
     } finally {
       await stack.close();
     }
