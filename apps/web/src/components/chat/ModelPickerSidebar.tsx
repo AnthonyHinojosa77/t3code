@@ -28,6 +28,8 @@ function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
 const BADGE_BASE_CLASS =
   "pointer-events-none absolute -right-0.5 top-0.5 z-10 flex size-3.5 items-center justify-center rounded-full bg-transparent shadow-sm ";
 const NEW_BADGE_CLASS = `${BADGE_BASE_CLASS} text-update-foreground `;
+const SELECTED_COUNT_BADGE_CLASS =
+  "pointer-events-none absolute -right-0.5 bottom-0.5 z-40 flex size-3.5 items-center justify-center rounded-full bg-primary text-5xs font-semibold text-primary-foreground tabular-nums";
 
 const PICKER_TOOLTIP_SIDE = "left" as const;
 const PICKER_TOOLTIP_SIDE_OFFSET = 8;
@@ -42,6 +44,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   selectableUnavailableInstanceIds?: ReadonlySet<ProviderInstanceId>;
   getDisabledInstanceTooltip?: (entry: ProviderInstanceEntry) => string;
   newBadgeInstanceIds?: ReadonlySet<ProviderInstanceId>;
+  /** Opt-in: how many models are picked from each provider, for multi-model pickers. */
+  selectedCountByInstance?: ReadonlyMap<ProviderInstanceId, number>;
 }) {
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
     props.onSelectInstance(instanceId);
@@ -137,6 +141,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const isHovered = hoveredInstanceId === entry.instanceId;
             const showNewBadge = props.newBadgeInstanceIds?.has(entry.instanceId) ?? false;
             const showInstanceBadge = shouldShowInstanceBadge(entry, props.instanceEntries);
+            const selectedCount = props.selectedCountByInstance?.get(entry.instanceId) ?? 0;
+            const selectedCountLabel = selectedCount > 0 ? `, ${selectedCount} selected` : "";
 
             const tooltip = isUnavailable
               ? describeUnavailableInstance(entry)
@@ -166,13 +172,13 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 focusableWhenDisabled={!isDisabled}
                 aria-pressed={isSelected}
                 type="button"
-                aria-label={
+                aria-label={`${
                   isUnavailable || isContextDisabled
                     ? tooltip
                     : showNewBadge
                       ? `${entry.displayName}, new`
                       : entry.displayName
-                }
+                }${selectedCountLabel}`}
               >
                 <ProviderInstanceIcon
                   driverKind={entry.driverKind}
@@ -195,6 +201,11 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 {showNewBadge ? (
                   <span className={NEW_BADGE_CLASS} aria-hidden>
                     <SparklesIcon className="size-2" />
+                  </span>
+                ) : null}
+                {selectedCount > 0 ? (
+                  <span className={SELECTED_COUNT_BADGE_CLASS} aria-hidden>
+                    {selectedCount}
                   </span>
                 ) : null}
               </Toolbar.Button>

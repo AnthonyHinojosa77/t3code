@@ -349,6 +349,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
+  /**
+   * `single` (default) is the stock picker: a click picks one model, and Shift adds one when
+   * `onToggleModel` is set. `council` makes every pick a toggle through `onToggleModel`.
+   */
+  selectionMode?: "single" | "council";
+  /** Opt-in per-provider count badges on the rail, for multi-model selection. */
+  selectedCountByInstance?: ReadonlyMap<ProviderInstanceId, number>;
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -372,6 +379,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     onToggleModel,
     onRequestClose,
     onOpenProviderSetup,
+    selectionMode = "single",
+    selectedCountByInstance,
   } = props;
   const [searchQuery, setSearchQuery] = useState("");
   const modelListRef = useRef<LegendListRef | null>(null);
@@ -489,7 +498,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     const resolvedModel = resolveSelectableModel(entry.driverKind, modelSlug, options);
     if (!resolvedModel) return null;
-    if (additive && onToggleModel) {
+    if ((additive || selectionMode === "council") && onToggleModel) {
       onToggleModel(instanceId, resolvedModel);
     } else {
       onInstanceModelChange(instanceId, resolvedModel);
@@ -840,6 +849,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
+            {...(selectedCountByInstance ? { selectedCountByInstance } : {})}
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {
