@@ -22,7 +22,7 @@ import {
 } from "./markdownLinks.ts";
 import { upgradeLegacyContextMessage } from "./composerContextLegacy.ts";
 import {
-  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  isAttachmentOnlyBootstrapPrompt,
   parseComposerContextHref,
 } from "./composerContextReferences.ts";
 import { assistantCitationLabel, parseAssistantCitationHref } from "./assistantCitations.ts";
@@ -220,7 +220,7 @@ export function searchableMessageSegments(
 ): readonly string[] | null {
   if (message.role === "user") {
     // Clients hide this prompt, so find must not match text nobody can see.
-    if (message.text === ATTACHMENT_ONLY_BOOTSTRAP_PROMPT) return [];
+    if (isAttachmentOnlyBootstrapPrompt(message.text)) return [];
     const text = message.context ? message.text : upgradeLegacyContextMessage(message.text).text;
     return markdownThreadFindText(text, true, cwd, skills);
   }

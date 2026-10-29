@@ -23,9 +23,16 @@ describe("resolveUserMessagePresentation", () => {
   });
 
   it("hides the prompt that stands in for an attachment-only message", () => {
-    expect(
-      resolveUserMessagePresentation({ role: "user", text: ATTACHMENT_ONLY_BOOTSTRAP_PROMPT }),
-    ).toEqual({ text: "", attribution: null, scheduledTaskId: undefined });
+    for (const text of [
+      ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`,
+    ]) {
+      expect(resolveUserMessagePresentation({ role: "user", text })).toEqual({
+        text: "",
+        attribution: null,
+        scheduledTaskId: undefined,
+      });
+    }
   });
 
   it("shows a guest's own words and name, not the attributed text the agent reads", () => {
