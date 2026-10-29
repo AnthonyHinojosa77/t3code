@@ -146,7 +146,7 @@ describe("SidebarUpdatePill update everything", () => {
   });
 
   const studio = "studio" as EnvironmentId;
-  const interruption = /Running tasks and tool calls will be interrupted/;
+  const interruption = /interrupt/i;
 
   it.each([
     { choice: "Cancel", runs: 0 },
@@ -172,9 +172,6 @@ describe("SidebarUpdatePill update everything", () => {
       const dialog = page.getByRole("alertdialog");
       await expect.element(dialog.getByText(interruption)).toBeVisible();
       await expect.element(dialog).toHaveAccessibleDescription(interruption);
-      await expect
-        .element(dialog.getByText(/Tool calls in progress will not resume/))
-        .toBeVisible();
 
       await userEvent.click(dialog.getByRole("button", { name: choice, exact: true }));
       await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull());

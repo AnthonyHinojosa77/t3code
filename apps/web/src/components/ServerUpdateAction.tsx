@@ -36,8 +36,7 @@ const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
   resuming: "Restarting…",
 };
 const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
-const DESKTOP_UPDATE_INTERRUPTION_WARNING =
-  "Running tasks and tool calls will be interrupted. If thread continuation is on, threads resume afterwards, but tool calls in progress do not.";
+const DESKTOP_UPDATE_INTERRUPTION_WARNING = "Updates interrupt tasks and tool calls.";
 
 export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
@@ -138,7 +137,7 @@ export function ServerUpdatesAction({
       const desktopTargets = available.filter((target) => target.selfUpdate === "desktop-managed");
       if (desktopTargets.length > 0) {
         const confirmed = await requestConfirmDialog(
-          `Update the T3 Code desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}?\n\nThey will close and relaunch on those machines. ${DESKTOP_UPDATE_INTERRUPTION_WARNING}`,
+          `Update the T3 Code desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}?\n\n${DESKTOP_UPDATE_INTERRUPTION_WARNING}`,
         );
         if (!confirmed) return;
       }
@@ -240,7 +239,7 @@ export function ServerUpdateAction({
     }
     if (isDesktopAppUpdate) {
       const confirmed = await requestConfirmDialog(
-        `Update the T3 Code desktop app that runs the ${serverLabel}?\n\nIt will close and relaunch on that machine. ${DESKTOP_UPDATE_INTERRUPTION_WARNING}`,
+        `Update the T3 Code desktop app that runs the ${serverLabel}?\n\n${DESKTOP_UPDATE_INTERRUPTION_WARNING}`,
       );
       if (!confirmed) {
         return;

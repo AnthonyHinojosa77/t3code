@@ -109,9 +109,7 @@ function renderWithConfirmHost(element: ReactNode) {
 }
 
 async function answerDesktopUpdateDialog(choice: "Cancel" | "Confirm") {
-  await expect
-    .element(page.getByText(/Running tasks and tool calls will be interrupted/))
-    .toBeVisible();
+  await expect.element(page.getByRole("alertdialog")).toHaveAccessibleDescription(/interrupt/i);
   await userEvent.click(page.getByRole("button", { name: choice }));
   await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull());
 }

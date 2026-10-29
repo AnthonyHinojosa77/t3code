@@ -102,24 +102,6 @@ function UpdateEverythingDialogContent({
   cancelRef,
   descriptionId,
 }: UpdateEverythingDialogContentProps) {
-  const stopped = useAtomValue(
-    runningThreadCountAtom(
-      restarts
-        .filter((machine) => !machine.continuesThreads)
-        .map((machine) => machine.environmentId)
-        .join("\n"),
-    ),
-  );
-  const continuing = useAtomValue(
-    runningThreadCountAtom(
-      restarts
-        .filter((machine) => machine.continuesThreads)
-        .map((machine) => machine.environmentId)
-        .join("\n"),
-    ),
-  );
-  const running = stopped + continuing;
-  const threads = `${running} running ${running === 1 ? "thread" : "threads"}`;
   const restarting = new Set(restarts.map((machine) => machine.environmentId));
   const updating = rows.filter((row) => row.app !== null || row.providers.length > 0);
   const skipped = rows.filter((row) => row.skipped !== null);
@@ -215,15 +197,7 @@ function UpdateEverythingDialogContent({
             id={`${descriptionId}-interruption`}
             className="self-center text-muted-foreground text-sm max-sm:order-1 max-sm:text-center sm:mr-auto"
           >
-            Running tasks and tool calls will be interrupted. Tool calls in progress will not
-            resume.
-            {running === 0
-              ? null
-              : stopped === 0
-                ? ` ${threads} can resume after the restart.`
-                : continuing === 0
-                  ? ` ${threads} will not resume automatically.`
-                  : ` ${continuing} of ${threads} can resume after the restart.`}
+            Updates interrupt tasks and tool calls.
           </p>
         ) : null}
         <AlertDialogClose ref={cancelRef} render={<Button variant="outline" />}>
