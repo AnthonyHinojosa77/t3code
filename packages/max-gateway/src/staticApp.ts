@@ -74,9 +74,8 @@ function sendMissing(res: ServerResponse): void {
 }
 
 /**
- * Serves `distDir` for GET and HEAD.
- * Real files are sent as-is. A navigation path with no file falls back to
- * `index.html`. API, websocket, and `/__max` paths are left to the gateway.
+ * Serves `distDir` for GET and HEAD; a navigation path with no file falls back to `index.html`.
+ * API, websocket, `/__max`, `/.well-known` and `/oauth` paths are left to the gateway.
  * Returns false when this request is not a static-app request.
  */
 export async function tryServeStatic(
@@ -94,7 +93,11 @@ export async function tryServeStatic(
     pathname === "/ws" ||
     pathname.startsWith("/ws/") ||
     pathname === "/__max" ||
-    pathname.startsWith("/__max/")
+    pathname.startsWith("/__max/") ||
+    pathname === "/.well-known" ||
+    pathname.startsWith("/.well-known/") ||
+    pathname === "/oauth" ||
+    pathname.startsWith("/oauth/")
   ) {
     return false;
   }

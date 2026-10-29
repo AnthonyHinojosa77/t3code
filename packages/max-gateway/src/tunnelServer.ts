@@ -11,6 +11,7 @@ import { handleOwnedHttp } from "./ownedRoutes.ts";
 import type { OwnerRequestCheck } from "./ownerAuth.ts";
 import { tryServeStatic } from "./staticApp.ts";
 import {
+  ANONYMOUS_REQUEST_HEADER,
   FrameDecoder,
   FrameType,
   decodeWsMessage,
@@ -159,13 +160,26 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return undefined;
 }
 
-function copyRequestHeaders(req: IncomingMessage): HeaderMap {
+/** The marker is always dropped from the client; only `anonymous` sets it. */
+function copyRequestHeaders(req: IncomingMessage, anonymous = false): HeaderMap {
   const headers: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(req.headers)) {
-    if (value === undefined || HOP_BY_HOP.has(name)) continue;
+    if (value === undefined || HOP_BY_HOP.has(name) || name === ANONYMOUS_REQUEST_HEADER) continue;
     headers[name] = value;
   }
+  if (anonymous) headers[ANONYMOUS_REQUEST_HEADER] = "1";
   return headers;
+}
+
+/**
+ * T3's bootstrap reads these before anyone can sign in to MAX. They return metadata and
+ * `authenticated:false` to a caller without the bearer, so they need no MAX session.
+ */
+export function isPublicBootstrapRequest(method: string, pathname: string): boolean {
+  return (
+    method === "GET" &&
+    (pathname === "/api/auth/session" || pathname === "/.well-known/t3/environment")
+  );
 }
 
 function writeHttp(socket: Duplex, status: number, body: string): void {
@@ -438,7 +452,8 @@ export async function startTunnelServer(
       }
       return;
     }
-    if (!(await options.isOwnerRequest(req))) {
+    const anonymous = !(await options.isOwnerRequest(req));
+    if (anonymous && !isPublicBootstrapRequest(req.method ?? "GET", url.pathname)) {
       req.resume();
       sendPlain(res, 401, "unauthorized\n");
       return;
@@ -462,7 +477,7 @@ export async function startTunnelServer(
     const requestFrame: HttpRequestFrame = {
       method: req.method ?? "GET",
       path: `${url.pathname}${url.search}`,
-      headers: copyRequestHeaders(req),
+      headers: copyRequestHeaders(req, anonymous),
     };
     try {
       send(streamId, FrameType.httpRequest, jsonBuffer(requestFrame));

@@ -9,6 +9,12 @@
 
 export const MAX_FRAME_PAYLOAD = 8 * 1024 * 1024;
 
+/**
+ * Set only by the gateway, on T3's public bootstrap requests from a visitor with no MAX
+ * session. The companion then forwards them without the bearer. Clients cannot set it.
+ */
+export const ANONYMOUS_REQUEST_HEADER = "x-max-anonymous";
+
 export const FrameType = {
   httpRequest: 1,
   httpRequestChunk: 2,

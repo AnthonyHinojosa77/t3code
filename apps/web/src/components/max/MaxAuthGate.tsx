@@ -91,6 +91,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     setDisplayName("");
     setError(null);
     setMode("login");
+    // T3 resolves its own sign-in once per page load, so start over without the session.
+    window.location.assign("/");
   }, []);
 
   async function onSubmit(event: FormEvent) {
@@ -116,12 +118,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
         setError(data.error ?? `Request failed: ${response.status}`);
         return;
       }
-      setUser(data.user);
-      const me = await fetch("/api/auth/me", { credentials: "include" });
-      if (me.ok) {
-        const current = (await me.json()) as { personalMode?: boolean };
-        setPersonalMode(current.personalMode === true);
-      }
+      // Reload so T3's bootstrap runs again, now with the MAX cookie and the Mini's bearer.
+      window.location.assign("/");
     };
     // Promise handlers, not try/finally: React Compiler cannot lower a `finally` clause.
     await sendCredentials()

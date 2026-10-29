@@ -278,15 +278,18 @@ describe("personal mode auth", () => {
         headers: { cookie },
       });
       expect(proxied.status).toBe(502);
-      const missing = await send(`${gateway.url}/api/auth/session`);
+      const missing = await send(`${gateway.url}/api/auth/clients`);
       expect(missing.status).toBe(401);
+      // T3's bootstrap session check is public; with no tunnel it fails at the proxy, not 401.
+      const bootstrap = await send(`${gateway.url}/api/auth/session`);
+      expect(bootstrap.status).toBe(502);
 
       const loggedOut = await send(`${gateway.url}/api/auth/logout`, {
         method: "POST",
         headers: { cookie },
       });
       expect(loggedOut.status).toBe(200);
-      const afterLogout = await send(`${gateway.url}/api/auth/session`, {
+      const afterLogout = await send(`${gateway.url}/api/auth/clients`, {
         headers: { cookie },
       });
       expect(afterLogout.status).toBe(401);
@@ -297,7 +300,7 @@ describe("personal mode auth", () => {
       });
       const fresh = sessionCookie(again.setCookie);
       gateway.store.expireSession(decodeURIComponent(fresh.slice("maximus_session=".length)));
-      const expired = await send(`${gateway.url}/api/auth/session`, {
+      const expired = await send(`${gateway.url}/api/auth/clients`, {
         headers: { cookie: fresh },
       });
       expect(expired.status).toBe(401);
@@ -431,8 +434,17 @@ describe("personal mode auth", () => {
       expect(shell.body).toContain("MAX-SHELL");
       const escaped = await send(`${withDist.url}/%2e%2e/secret.txt`);
       expect(escaped.body).not.toContain("TOP-SECRET");
-      const api = await send(`${withDist.url}/api/auth/session`);
+      const api = await send(`${withDist.url}/api/auth/clients`);
       expect(api.status).toBe(401);
+      // T3 metadata paths are never answered with the SPA shell.
+      const environment = await send(`${withDist.url}/.well-known/t3/environment`);
+      expect(environment.status).toBe(502);
+      expect(environment.body).not.toContain("MAX-SHELL");
+      for (const pathname of ["/.well-known/other", "/oauth/token"]) {
+        const gated = await send(`${withDist.url}${pathname}`);
+        expect(gated.status, pathname).toBe(401);
+        expect(gated.body).not.toContain("MAX-SHELL");
+      }
     } finally {
       await withDist.close();
     }

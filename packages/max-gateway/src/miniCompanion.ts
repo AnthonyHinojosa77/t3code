@@ -10,6 +10,7 @@ import { WebSocket, type RawData } from "ws";
 
 import { BearerTokenSource, type BearerTokenOptions } from "./bearerToken.ts";
 import {
+  ANONYMOUS_REQUEST_HEADER,
   FrameDecoder,
   FrameType,
   decodeWsMessage,
@@ -109,10 +110,11 @@ function upstreamWsUrl(base: string, pathAndQuery: string): string {
   return url.toString();
 }
 
+/** A null token forwards the request with no Authorization, as T3 sees an anonymous visitor. */
 function upstreamHeaders(
   headers: HeaderMap,
   host: string,
-  token: string,
+  token: string | null,
 ): http.OutgoingHttpHeaders {
   const out: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers)) {
@@ -121,15 +123,22 @@ function upstreamHeaders(
       HOP_BY_HOP.has(lower) ||
       lower === "host" ||
       lower === "cookie" ||
-      lower === "authorization"
+      lower === "authorization" ||
+      lower === ANONYMOUS_REQUEST_HEADER
     ) {
       continue;
     }
     out[lower] = typeof value === "string" ? value : [...value];
   }
   out.host = host;
-  out.authorization = `Bearer ${token}`;
+  if (token !== null) out.authorization = `Bearer ${token}`;
   return out;
+}
+
+function isAnonymousRequest(headers: HeaderMap): boolean {
+  return Object.entries(headers).some(
+    ([name, value]) => name.toLowerCase() === ANONYMOUS_REQUEST_HEADER && value === "1",
+  );
 }
 
 export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCompanion {
@@ -246,13 +255,16 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
     stream: LiveHttp,
     request: HttpRequestFrame,
   ): Promise<void> {
-    let token: string;
-    try {
-      token = await tokens.getToken();
-    } catch {
-      streams.delete(streamId);
-      send(streamId, FrameType.streamError, jsonBuffer({ message: "bearer token unavailable" }));
-      return;
+    // The gateway marks T3's public bootstrap from a visitor with no MAX session.
+    let token: string | null = null;
+    if (!isAnonymousRequest(request.headers)) {
+      try {
+        token = await tokens.getToken();
+      } catch {
+        streams.delete(streamId);
+        send(streamId, FrameType.streamError, jsonBuffer({ message: "bearer token unavailable" }));
+        return;
+      }
     }
     if (streams.get(streamId) !== stream) return;
     const target = upstreamHttpUrl(httpBase, request.path);
