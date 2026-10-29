@@ -55,6 +55,7 @@ import {
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
 const OPEN_CODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
   serverUrl: "http://test.invalid",
 });
@@ -2764,7 +2765,7 @@ it.live.each([true, false])("opens an authenticated OpenCode session (external=%
     const instanceId = ProviderInstanceId.make("opencode-auth");
     const adapter = yield* makeOpenCodeAdapterV2({
       instanceId,
-      settings: yield* Schema.decodeEffect(OpenCodeSettings)({
+      settings: yield* decodeOpenCodeSettings({
         serverUrl: external ? url : "",
         ...(external ? { serverPassword: password } : {}),
       }),
