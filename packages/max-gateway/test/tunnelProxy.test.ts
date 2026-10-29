@@ -314,6 +314,10 @@ async function startStack(options?: {
       tunnelSecret: SECRET,
       upstreamHttpBase: upstream.url,
       upstreamWsBase: upstream.wsUrl,
+      env: {
+        MAX_COUNCIL_DB: path.join(tokenDir, "council.sqlite"),
+        MAX_TEMPLATES_DIR: path.join(tokenDir, "templates"),
+      },
     });
     await withTimeout(companion.ready, 3_000, "companion ready");
   }
@@ -1035,3 +1039,23 @@ function readRest(response: IncomingMessage, already: Buffer): Promise<Buffer> {
     response.resume();
   });
 }
+
+it("serves council only for the owner through the tunnel and never forwards it upstream", async () => {
+  const stack = await startStack();
+  try {
+    const anonymous = await sendHttp(`${stack.gateway.url}/api/council/rounds`);
+    expect(anonymous.status).toBe(401);
+    const owner = await sendHttp(`${stack.gateway.url}/api/council/rounds`, {
+      headers: ownerHeaders(stack.sessionToken),
+    });
+    expect(owner.status).toBe(200);
+    expect(JSON.parse(owner.body.toString("utf8"))).toEqual({ rounds: [] });
+    const unknown = await sendHttp(`${stack.gateway.url}/api/council/unknown`, {
+      headers: ownerHeaders(stack.sessionToken),
+    });
+    expect(unknown.status).toBe(404);
+    expect(stack.upstream.requests.filter((r) => r.url.startsWith("/api/council"))).toHaveLength(0);
+  } finally {
+    await stack.close();
+  }
+});
