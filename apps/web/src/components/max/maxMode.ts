@@ -34,6 +34,12 @@ export function writeMaxMode(mode: MaxMode): void {
   writeLocalStorageValue(MAX_MODE_STORAGE_KEY, mode, DEFAULT_MAX_MODE, MaxModeSchema);
 }
 
+/** Leaves Agent mode: council is stored first, so `/` renders the council home. */
+export function returnToCouncil(goHome: () => unknown): void {
+  writeMaxMode("council");
+  void goHome();
+}
+
 /** Shared across components: a write from the sidebar re-renders the `/` route. */
 export function useMaxMode(): [MaxMode, (mode: MaxMode) => void] {
   const [mode, setMode] = useLocalStorage(MAX_MODE_STORAGE_KEY, DEFAULT_MAX_MODE, MaxModeSchema);
