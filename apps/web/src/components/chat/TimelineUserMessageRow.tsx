@@ -327,9 +327,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       : null,
   );
   const senderLabel = senderShell?.title.trim() || "Agent";
-  const resolvedContext = resolveUserMessageContext(
-    userMessage.attribution === "guest" ? { ...row.message, text: userMessage.text } : row.message,
-  );
+  const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
   const chippedAttachmentIds = new Set(
@@ -340,6 +338,21 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
   const unchippedFiles = otherUserFiles.filter((file) => !chippedAttachmentIds.has(file.id));
+  // Images or videos sent without words show as media, not as a bubble around them.
+  const mediaOnly =
+    !folded &&
+    userMessage.attribution !== "guest" &&
+    resolvedContext.text.trim() === "" &&
+    userAudio.length === 0 &&
+    unchippedFiles.length === 0 &&
+    unknownAttachments.length === 0 &&
+    regularImages.length + userVideos.length > 0;
+  // A lone image keeps its own shape; a 4:3 crop hides most of a wide screenshot.
+  const loneImage =
+    mediaOnly &&
+    userVideos.length === 0 &&
+    regularImages.length === 1 &&
+    regularImages[0]!.source?.kind !== "snap-shot";
   const annotationRecordIds = resolvedContext.records
     .filter((record) => record.kind === "preview-annotation")
     .map((record) => record.contextId);
@@ -469,8 +482,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         className={cn(
           "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
-          userMessage.attribution === "guest" ? guestBubbleClassName(false) : "bg-message",
-          !folded && "p-3",
+          userMessage.attribution === "guest"
+            ? guestBubbleClassName(false)
+            : !mediaOnly && "bg-message",
+          !folded && !mediaOnly && "p-3",
           folded && expanded && "w-full",
         )}
       >
@@ -502,7 +517,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             )}
           >
             {(regularImages.length > 0 || userVideos.length > 0) && (
-              <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
+              <div
+                className={cn(
+                  "grid gap-2",
+                  !mediaOnly
+                    ? "mb-2 max-w-[210px] grid-cols-2"
+                    : loneImage
+                      ? "max-w-full"
+                      : "w-80 max-w-full grid-cols-2",
+                )}
+              >
                 {regularImages.map((image) => (
                   <div
                     key={image.id}
@@ -510,7 +534,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       "bg-background/70",
                       image.source?.kind === "snap-shot" && image.previewUrl
                         ? cn(SNAP_SHOT_ATTACHMENT_FRAME_CLASS, "col-span-2")
-                        : "aspect-[4/3] overflow-hidden rounded-lg border border-border/80",
+                        : cn(
+                            "overflow-hidden rounded-lg border border-border/80",
+                            !loneImage && "aspect-[4/3]",
+                          ),
                     )}
                   >
                     {image.previewUrl ? (
@@ -532,7 +559,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                           alt={image.name}
                           decoding="async"
                           loading="lazy"
-                          className="block size-full transform-gpu object-cover"
+                          className={cn(
+                            "block transform-gpu",
+                            // A fixed height keeps the row from growing when the image loads.
+                            loneImage
+                              ? "h-48 w-auto min-w-24 max-w-full object-cover"
+                              : "size-full object-cover",
+                          )}
                         />
                       </button>
                     ) : (

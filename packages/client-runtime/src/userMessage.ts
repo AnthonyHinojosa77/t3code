@@ -5,6 +5,7 @@ import {
   type OrchestrationV2IdleCompaction,
   ScheduledTaskId,
 } from "@t3tools/contracts";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 
 /** The working row while T3 Code's own compaction runs. */
 export const IDLE_COMPACTING_LABELS = {
@@ -68,7 +69,8 @@ export function resolveUserMessagePresentation(message: {
     };
   }
   return {
-    text: message.text,
+    // The agent needs words to start a turn; people sent only the attachments.
+    text: message.text === ATTACHMENT_ONLY_BOOTSTRAP_PROMPT ? "" : message.text,
     attribution:
       message.createdBy !== "agent"
         ? null

@@ -1596,6 +1596,16 @@ function renderFeedEntry(
       const visibleAttachments = attachments.filter(
         (attachment) => isImageAttachment(attachment) || !inlineAttachmentIds.has(attachment.id),
       );
+      // Images sent without words show as images, not as a bubble around them.
+      const mediaOnly =
+        foldRowId === null &&
+        presentation.attribution !== "guest" &&
+        presentation.text.trim() === "" &&
+        visibleAttachments.length + (entry.pendingMessage?.attachments.length ?? 0) > 0 &&
+        visibleAttachments.every(isImageAttachment) &&
+        (entry.pendingMessage?.attachments ?? []).every(
+          (attachment) => attachment.type === "image",
+        );
       return (
         <Animated.View
           className="mb-5 items-end"
@@ -1612,13 +1622,13 @@ function renderFeedEntry(
           <View
             className="min-w-0 rounded-[20px]"
             style={{
-              backgroundColor: userBubbleColor,
+              backgroundColor: mediaOnly ? undefined : userBubbleColor,
               maxWidth: props.duoColumns ? "85%" : props.userBubbleMaxWidth,
               ...(!bubbleBodyVisible
                 ? null
                 : hasReviewCommentContext
                   ? { width: props.reviewCommentBubbleWidth }
-                  : hasWideBlock || foldExpanded
+                  : hasWideBlock || foldExpanded || (mediaOnly && visibleAttachments.length > 0)
                     ? { width: props.duoColumns ? "85%" : props.userBubbleMaxWidth }
                     : null),
             }}
@@ -1640,7 +1650,13 @@ function renderFeedEntry(
               />
             ) : null}
             {bubbleBodyVisible ? (
-              <View className={cn("gap-2 px-3.5 pb-2.5", foldRowId === null && "pt-2.5")}>
+              <View
+                className={cn(
+                  "gap-2",
+                  !mediaOnly && "px-3.5 pb-2.5",
+                  !mediaOnly && foldRowId === null && "pt-2.5",
+                )}
+              >
                 {entry.pendingMessage?.attachments.map((attachment) =>
                   attachment.type === "image" && attachment.uploadedAttachmentId ? (
                     <MessageAttachmentImage
@@ -1707,7 +1723,7 @@ function renderFeedEntry(
                     })}
                   </View>
                 ) : null}
-                {message.text.trim().length > 0 ? (
+                {presentation.text.trim().length > 0 ? (
                   <MarkdownImageAvailableWidthContext
                     value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
                   >
