@@ -27,6 +27,7 @@ interface CapturedRequest {
   readonly url: string;
   readonly authorization: string | null;
   readonly cookie: string | null;
+  readonly anonymousMarker: string | null;
   readonly body: Buffer;
 }
 
@@ -109,8 +110,21 @@ async function startUpstream(
         authorization:
           typeof req.headers.authorization === "string" ? req.headers.authorization : null,
         cookie: typeof req.headers.cookie === "string" ? req.headers.cookie : null,
+        anonymousMarker:
+          typeof req.headers["x-max-anonymous"] === "string"
+            ? req.headers["x-max-anonymous"]
+            : null,
         body,
       });
+      if (url === "/.well-known/t3/environment") {
+        const payload = JSON.stringify({ environmentId: "stub-environment" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+        });
+        res.end(payload);
+        return;
+      }
       if (url.startsWith("/api/auth/websocket-ticket") && req.method === "POST") {
         const payload = JSON.stringify({ ticket: "upstream-ticket" });
         res.writeHead(200, {
@@ -121,7 +135,10 @@ async function startUpstream(
         return;
       }
       if (url.startsWith("/api/auth/session")) {
-        const payload = JSON.stringify({ authenticated: true });
+        // Like T3: authenticated only when the companion injected the bearer.
+        const payload = JSON.stringify({
+          authenticated: typeof req.headers.authorization === "string",
+        });
         res.writeHead(200, {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(payload),
@@ -236,6 +253,7 @@ async function startStack(options?: {
   readonly binary?: Buffer;
   readonly idleTimeoutMs?: number;
   readonly script?: "default" | "drip" | "stall";
+  readonly webDist?: string | null;
 }): Promise<Stack> {
   const upstream = await startUpstream(
     options?.binary ?? Buffer.alloc(0),
@@ -254,7 +272,7 @@ async function startStack(options?: {
     tunnelSecret: SECRET,
     personalMode: true,
     ownerEmail: "owner@example.com",
-    webDist: null,
+    webDist: options?.webDist ?? null,
     authStore: auth,
     isOwnerRequest: maximusSessionOwnerAuth((token) => auth.readSession(token) !== null),
     ...(options?.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
@@ -381,7 +399,7 @@ describe("max gateway tunnel", () => {
   it("rejects an unauthenticated proxied request with 401", async () => {
     const stack = await startStack();
     try {
-      const missing = await sendHttp(`${stack.gateway.url}/api/auth/session`);
+      const missing = await sendHttp(`${stack.gateway.url}/api/auth/clients`);
       expect(missing.status).toBe(401);
       const ticket = await sendHttp(`${stack.gateway.url}/api/auth/websocket-ticket`, {
         method: "POST",
@@ -523,6 +541,94 @@ describe("max gateway tunnel", () => {
       });
       expect(plan.status).toBe(200);
       expect(stack.upstream.requests).toHaveLength(before);
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("lets T3's bootstrap reach the Mini without a MAX session, and without the bearer", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "t3mc-bootstrap-"));
+    await writeFile(path.join(dir, "index.html"), "<html>MAX-SHELL</html>");
+    const stack = await startStack({ webDist: dir });
+    try {
+      const session = await sendHttp(`${stack.gateway.url}/api/auth/session`);
+      expect(session.status).toBe(200);
+      expect(JSON.parse(session.body.toString("utf8"))).toEqual({ authenticated: false });
+      const environment = await sendHttp(`${stack.gateway.url}/.well-known/t3/environment`);
+      expect(environment.status).toBe(200);
+      expect(environment.body.toString("utf8")).not.toContain("MAX-SHELL");
+      expect(JSON.parse(environment.body.toString("utf8"))).toEqual({
+        environmentId: "stub-environment",
+      });
+      expect(stack.upstream.requests.map((request) => request.url)).toEqual([
+        "/api/auth/session",
+        "/.well-known/t3/environment",
+      ]);
+      for (const request of stack.upstream.requests) {
+        expect(request.authorization).toBeNull();
+        expect(request.anonymousMarker).toBeNull();
+        expect(request.cookie).toBeNull();
+      }
+
+      const ownerSession = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(JSON.parse(ownerSession.body.toString("utf8"))).toEqual({ authenticated: true });
+      const ownerEnvironment = await sendHttp(`${stack.gateway.url}/.well-known/t3/environment`, {
+        headers: ownerHeaders(stack.sessionToken),
+      });
+      expect(ownerEnvironment.status).toBe(200);
+      for (const request of stack.upstream.requests.slice(2)) {
+        expect(request.authorization).toBe(`Bearer ${TOKEN}`);
+        expect(request.anonymousMarker).toBeNull();
+      }
+
+      // Only those two exact GETs are public; nearby paths still need the MAX session.
+      const before = stack.upstream.requests.length;
+      for (const [method, pathname] of [
+        ["POST", "/api/auth/session"],
+        ["GET", "/.well-known/t3/other"],
+        ["GET", "/oauth/token"],
+        ["POST", "/api/auth/websocket-ticket"],
+      ] as const) {
+        const refused = await sendHttp(`${stack.gateway.url}${pathname}`, { method });
+        expect(refused.status, `${method} ${pathname}`).toBe(401);
+        expect(refused.body.toString("utf8")).not.toContain("MAX-SHELL");
+      }
+      expect(stack.upstream.requests).toHaveLength(before);
+
+      const shell = await sendHttp(`${stack.gateway.url}/`);
+      expect(shell.status).toBe(200);
+      expect(shell.body.toString("utf8")).toContain("MAX-SHELL");
+    } finally {
+      await stack.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never trusts an anonymous marker sent by the client", async () => {
+    const stack = await startStack();
+    try {
+      const forged = await sendHttp(`${stack.gateway.url}/api/orchestration/shell`, {
+        headers: { "x-max-anonymous": "1" },
+      });
+      expect(forged.status).toBe(401);
+      expect(stack.upstream.requests).toHaveLength(0);
+
+      await sendHttp(`${stack.gateway.url}/api/orchestration/shell`, {
+        headers: ownerHeaders(stack.sessionToken, { "x-max-anonymous": "1" }),
+      });
+      const seen = stack.upstream.requests[0];
+      expect(seen?.url).toBe("/api/orchestration/shell");
+      expect(seen?.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(seen?.anonymousMarker).toBeNull();
+
+      // A forged marker on a public path changes nothing either: still anonymous, no bearer.
+      const session = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
+        headers: { "x-max-anonymous": "0" },
+      });
+      expect(JSON.parse(session.body.toString("utf8"))).toEqual({ authenticated: false });
+      expect(stack.upstream.requests[1]?.anonymousMarker).toBeNull();
     } finally {
       await stack.close();
     }
