@@ -1598,7 +1598,11 @@ try {
       await expect
         .poll(async () =>
           compact(
-            (await page.locator('[data-message-role="assistant"]').allInnerTexts()).join(""),
+            (
+              await page
+                .locator('[data-message-role="assistant"] [data-thread-find-text="true"]')
+                .allInnerTexts()
+            ).join(""),
           ).includes(expectedAnswer),
         )
         .toBe(true);
