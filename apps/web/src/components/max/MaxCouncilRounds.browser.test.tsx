@@ -1,5 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
-import { beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { useState } from "react";
 import "~/index.css";
@@ -78,10 +78,11 @@ vi.mock("./councilAttachments", () => ({
     ),
 }));
 
-// The chat window remembers chosen models in localStorage; each test starts with none chosen.
-beforeEach(() => {
+/** The chat window remembers chosen models in localStorage; a test starts and ends with none. */
+function freshSelection(): Disposable {
   localStorage.removeItem("max.council.selection");
-});
+  return { [Symbol.dispose]: () => localStorage.removeItem("max.council.selection") };
+}
 
 function ComposerHarness() {
   const [selection, setSelection] = useState<CouncilSelection>(EMPTY_COUNCIL_SELECTION);
@@ -153,6 +154,7 @@ it("enables Send only with a question, contender and judge, then posts once", as
 });
 
 it("shows a thinking state, then the first finisher in front, then the synthesis last", async () => {
+  using _selection = freshSelection();
   await phone();
   const { round } = councilFixture();
   const second: CouncilContenderState = {
@@ -231,6 +233,7 @@ it("shows a thinking state, then the first finisher in front, then the synthesis
 });
 
 it("turns pages with the previous and next buttons and the page edge", async () => {
+  using _selection = freshSelection();
   await phone();
   const { round } = councilFixture();
   round.status = "complete";
@@ -250,6 +253,7 @@ it("turns pages with the previous and next buttons and the page edge", async () 
 });
 
 it("shows needs-attention and failed/skipped states on their pages", async () => {
+  using _selection = freshSelection();
   await phone();
   const { round } = councilFixture();
   round.contenders[0]!.status = "needs-attention";
@@ -276,6 +280,7 @@ it("shows needs-attention and failed/skipped states on their pages", async () =>
 });
 
 it("preserves malformed synthesis as readable raw text", async () => {
+  using _selection = freshSelection();
   await phone();
   const { round } = councilFixture();
   round.status = "complete";
@@ -297,6 +302,7 @@ it("preserves malformed synthesis as readable raw text", async () => {
 });
 
 it("explains missing gateway instead of enabling Send", async () => {
+  using _selection = freshSelection();
   await phone();
   useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   using _fetch = vi
@@ -311,6 +317,7 @@ it("explains missing gateway instead of enabling Send", async () => {
 });
 
 it("creates, edits and deletes a custom template from the model window, keeping built-ins read-only", async () => {
+  using _selection = freshSelection();
   await phone();
   useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   const { template } = councilFixture();
@@ -356,6 +363,7 @@ it("creates, edits and deletes a custom template from the model window, keeping 
 });
 
 it("pauses polling when hidden, resumes on visibility and aborts on unmount", async () => {
+  using _selection = freshSelection();
   const { round } = councilFixture();
   using hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
   using fetch = vi
@@ -427,6 +435,7 @@ it("stages files from the plus button, blocks unreadable images and sends one co
 });
 
 it("cancels an active round through the coordinator", async () => {
+  using _selection = freshSelection();
   const { round } = councilFixture();
   using fetch = vi
     .spyOn(globalThis, "fetch")
@@ -440,6 +449,7 @@ it("cancels an active round through the coordinator", async () => {
 });
 
 it("puts a newly created round in the URL and sends default roles", async () => {
+  using _selection = freshSelection();
   useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   const { template, round } = councilFixture();
   using fetch = vi
@@ -470,6 +480,7 @@ it("puts a newly created round in the URL and sends default roles", async () => 
 });
 
 it("shows approvals still required and removes the note for auto mode", async () => {
+  using _selection = freshSelection();
   await phone();
   const { round } = councilFixture();
   round.status = "complete";
