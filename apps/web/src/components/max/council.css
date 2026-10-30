@@ -25,6 +25,7 @@
 }
 .max-scope .max-icon-button {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
@@ -201,37 +202,37 @@
     white-space: normal;
   }
   /* One composer row: the text field sits between the plus/model controls and mic/send. */
-  .max-composer-field {
+  .max-composer .max-composer-field {
     flex-direction: row;
     align-items: center;
     padding-right: 0.25rem;
   }
-  .max-composer-field > .max-composer-input {
+  .max-scope .max-composer-field > .max-composer-input {
     flex: 1 1 auto;
     order: 2;
     min-height: 40px;
     max-height: 80px;
     padding: 0.5rem 0.5rem;
   }
-  .max-composer-field > .max-attachments {
+  .max-composer .max-composer-field > .max-attachments {
     order: 1;
     padding: 0 0 0 0.5rem;
   }
-  .max-composer-field > .max-composer-row {
+  .max-composer .max-composer-field > .max-composer-row {
     display: contents;
   }
-  .max-composer-row > [aria-label="Add files or settings"],
-  .max-composer-row > .max-model-button {
+  .max-composer .max-composer-row > [aria-label="Add files or settings"],
+  .max-scope .max-composer-row > .max-model-button {
     order: 1;
   }
-  .max-composer-row > .max-model-button {
+  .max-scope .max-composer-row > .max-model-button {
     max-width: 14rem;
   }
-  .max-composer-row > .flex-1 {
+  .max-composer .max-composer-row > .flex-1 {
     display: none;
   }
-  .max-composer-row > [aria-pressed],
-  .max-composer-row > .max-send {
+  .max-scope .max-composer-row > [aria-pressed],
+  .max-scope .max-composer-row > .max-send {
     order: 3;
   }
   .max-user-meta,
@@ -621,6 +622,7 @@
 }
 .max-scope .max-model-button {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 0.4rem;
   min-width: 40px;
@@ -645,6 +647,7 @@
 }
 .max-scope .max-send {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 40px;
