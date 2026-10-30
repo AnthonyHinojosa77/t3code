@@ -148,6 +148,17 @@ export async function main(args = process.argv.slice(2)) {
     if (dryRun) console.log(`Dry run: launchctl ${args.join(" ")}`);
     else command("launchctl", args, allowFailure);
   };
+  // `bootout` returns before launchd finishes removing the job; bootstrapping
+  // too early fails with "Bootstrap failed: 5: Input/output error".
+  const bootout = async () => {
+    launch(["bootout", `${domain}/${LABEL}`], true);
+    if (dryRun) return;
+    const deadline = Date.now() + 15_000;
+    while (NodeChildProcess.spawnSync("launchctl", ["print", `${domain}/${LABEL}`]).status === 0) {
+      if (Date.now() >= deadline) throw new Error(`${LABEL} did not stop within 15 seconds.`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
   if (action === "install") {
     const node = nodeExecutable();
     const stage = NodePath.join(paths.base, "app.next");
@@ -182,7 +193,7 @@ export async function main(args = process.argv.slice(2)) {
     const plistStage = `${paths.plist}.next`;
     await NodeFSP.writeFile(plistStage, servicePlist(paths), { mode: 0o600 });
     command("plutil", ["-lint", plistStage]);
-    launch(["bootout", `${domain}/${LABEL}`], true);
+    await bootout();
     if (NodeFS.existsSync(paths.app)) {
       await NodeFSP.rm(paths.previous, { recursive: true, force: true });
       await NodeFSP.rename(paths.app, paths.previous);
@@ -211,7 +222,7 @@ export async function main(args = process.argv.slice(2)) {
     );
     await status(paths, domain, dryRun);
   } else if (action === "uninstall") {
-    launch(["bootout", `${domain}/${LABEL}`], true);
+    await bootout();
     await NodeFSP.rm(paths.plist, { force: true });
     console.log("LaunchAgent removed; app, logs and environment file retained.");
   } else if (action === "restart") {
