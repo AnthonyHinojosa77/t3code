@@ -551,7 +551,10 @@ try {
   });
   await step("logout-after-register", async () => {
     loggingOut = true;
-    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "networkidle" }),
+      page.getByRole("button", { name: "Sign out", exact: true }).click(),
+    ]);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
     loggingOut = false;
   });
@@ -861,7 +864,10 @@ try {
   });
   await step("logout", async () => {
     loggingOut = true;
-    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "networkidle" }),
+      page.getByRole("button", { name: "Sign out", exact: true }).click(),
+    ]);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
     loggingOut = false;
   });
