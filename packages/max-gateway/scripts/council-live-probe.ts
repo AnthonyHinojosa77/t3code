@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - Standalone live probe script without an Effect runtime.
+// @effect-diagnostics globalConsole:off - Operator-facing probe output.
+// @effect-diagnostics globalTimers:off - Bounded probe polling.
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 import * as NodeFS from "node:fs";
