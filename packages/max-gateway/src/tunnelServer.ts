@@ -1,8 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off - The gateway is a raw HTTP and WebSocket multiplexer, not an Effect HTTP client.
 // @effect-diagnostics globalTimers:off - Idle deadlines are socket timers so a stalled stream cannot hang a request.
-import { timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
+import * as NodeCrypto from "node:crypto";
+const { timingSafeEqual } = NodeCrypto;
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+type Server = NodeHttp.Server;
+type ServerResponse = NodeHttp.ServerResponse;
+const { createServer } = NodeHttp;
+import * as NodeStream from "node:stream";
+type Duplex = NodeStream.Duplex;
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import { isMaxAuthRoute } from "./auth/http.ts";
@@ -71,16 +77,9 @@ export interface TunnelServerOptions {
   readonly isOwnerRequest: OwnerRequestCheck;
   readonly host?: string;
   readonly port?: number;
-  /**
-   * Idle limit for one proxied HTTP stream, in milliseconds.
-   * The clock starts when the stream is accepted and resets when request-body
-   * data arrives, or when a response head, chunk, or end is forwarded.
-   * A stream with none of that activity for this long fails with 504 and an
-   * `httpAbort` frame. Default 60000.
-   * `responseTimeoutMs` is the same idle limit, kept for existing callers.
-   * When both are set, `idleTimeoutMs` wins.
-   * WebSocket upgrades use `upgradeTimeoutMs` once and do not idle-reset.
-   */
+  /** HTTP idle deadline resets on request data or response head/chunk/end.
+   * Expires with 504 and httpAbort; defaults to 60000, overriding responseTimeoutMs.
+   * WebSocket upgrades use the separate, non-resetting upgradeTimeoutMs. */
   readonly idleTimeoutMs?: number;
   readonly responseTimeoutMs?: number;
   readonly upgradeTimeoutMs?: number;

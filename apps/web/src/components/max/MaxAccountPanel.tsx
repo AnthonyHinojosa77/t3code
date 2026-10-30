@@ -20,6 +20,7 @@ export function MaxAccountPanel() {
   const [personalMode, setPersonalMode] = useState<boolean | null>(null);
   const [plan, setPlan] = useState<PlanStatus | null>(null);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the account view with the remote session and plan.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -45,17 +46,19 @@ export function MaxAccountPanel() {
   if (personalMode !== false) return null;
 
   return (
-    <section className="bg-[#0a0a0a] p-4 font-mono text-[#f5f5f5]">
-      <h1 className="text-xs tracking-widest text-[#00ff41]">ACCOUNT</h1>
+    <section className="max-scope bg-(--max-black) p-4 font-mono text-(--max-bright)">
+      <h1 className="text-xs tracking-widest text-(--max-green)">ACCOUNT</h1>
       <p className="mt-3 text-sm">{plan?.planName ?? "Plan"}</p>
-      <p className="mt-1 text-[10px] tracking-wide text-[#737373]">{plan?.planDescription}</p>
-      <p className="mt-3 text-[10px] tracking-widest text-[#737373]">
+      <p className="mt-1 text-3xs/normal tracking-wide text-(--max-muted)">
+        {plan?.planDescription}
+      </p>
+      <p className="mt-3 text-3xs/normal tracking-widest text-(--max-muted)">
         USAGE {plan?.usagePercent ?? 0}% {plan?.capped ? "CAPPED" : plan?.threshold?.toUpperCase()}
       </p>
-      <div className="mt-2 h-1 w-full bg-[#222]">
-        <div className="h-1 bg-[#00ff41]" style={{ width: `${plan?.usagePercent ?? 0}%` }} />
+      <div className="mt-2 h-1 w-full bg-(--max-track)">
+        <div className="h-1 bg-(--max-green)" style={{ width: `${plan?.usagePercent ?? 0}%` }} />
       </div>
-      <p className="mt-2 text-[10px] text-[#737373]">
+      <p className="mt-2 text-3xs/normal text-(--max-muted)">
         Turns today {plan?.turnsUsedToday ?? 0}
         {plan?.dailyTurnCap === null ? " / no cap" : ` / ${plan?.dailyTurnCap ?? 0}`}
       </p>

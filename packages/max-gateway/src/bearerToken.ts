@@ -1,10 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off - Token files and the local `t3` CLI are process calls, not Effect services.
 // @effect-diagnostics globalTimers:off - Renewal is a long-lived process timer, checked again every few hours.
 // @effect-diagnostics globalDate:off - Expiry uses wall-clock time, overridable with an injected clock in tests.
-import { spawn } from "node:child_process";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import path from "node:path";
+import * as NodeChildProcess from "node:child_process";
+const { spawn } = NodeChildProcess;
+import * as NodeFSP from "node:fs/promises";
+const { chmod, mkdir, readFile, rename, writeFile } = NodeFSP;
+import * as NodeOS from "node:os";
+const { homedir } = NodeOS;
+import * as NodePath from "node:path";
+const path = NodePath;
 
 /**
  * Scopes verified against `AuthGrantScope` in packages/contracts/src/auth.ts.

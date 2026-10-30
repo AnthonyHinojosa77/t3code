@@ -2,15 +2,8 @@ import Stripe from "stripe";
 
 import type { PlanId } from "./plans.ts";
 
-/**
- * Port of MAX's Stripe helpers. Personal mode never calls these: the gateway
- * returns 403 for `/api/billing/*` before this module loads a client.
- * `getFrontendUrl` defaults to `http://localhost:5173`. MAX appended
- * `/Maximus-Alpha/` because that app was served from a subpath. This app is
- * served at `/`.
- * The webhook route is not ported. A paid checkout does not update the user
- * row until that route exists.
- */
+/** Personal mode blocks billing before loading Stripe. This app is served at `/`.
+ * The webhook is not ported: paid checkout does not yet update the user row. */
 
 let stripeClient: Stripe | null = null;
 
@@ -142,7 +135,7 @@ export async function createCheckoutSession(
     throw new Error("Cannot checkout for the Beta plan.");
   }
   if (options.plan === "omega" && options.interval === "yearly") {
-    throw new Error("Omega is billed monthly only — no annual SKU is offered.");
+    throw new Error("Omega is billed monthly only; no annual SKU is offered.");
   }
   const priceId = getPriceId(options.plan, options.interval);
   if (!priceId) {

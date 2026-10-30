@@ -1,10 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - These tests drive real sockets and a temp SQLite file.
 // @effect-diagnostics globalTimers:off - Request deadlines wait on real socket I/O.
 // @effect-diagnostics globalDate:off - The owner-email warning test does not use fake timers.
-import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+const { request: httpRequest } = NodeHttp;
+import * as NodeFSP from "node:fs/promises";
+const { mkdtemp, rm, writeFile, mkdir } = NodeFSP;
+import * as NodeOS from "node:os";
+const { tmpdir } = NodeOS;
+import * as NodePath from "node:path";
+const path = NodePath;
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { warnIfOwnerEmailMissing } from "../src/auth/personalMode.ts";
@@ -24,22 +29,6 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
 interface HttpResult {
   readonly status: number;
   readonly body: string;
@@ -52,45 +41,39 @@ function send(
 ): Promise<HttpResult> {
   const target = new URL(url);
   const body = init?.body;
-  const headers = { ...(init?.headers ?? {}) };
+  const headers = { ...init?.headers };
   if (body !== undefined && headers["content-type"] === undefined) {
     headers["content-type"] = "application/json";
     headers["content-length"] = String(Buffer.byteLength(body));
   }
-  return withTimeout(
-    new Promise((resolve, reject) => {
-      const req = httpRequest(
-        {
-          hostname: target.hostname,
-          port: target.port,
-          path: `${target.pathname}${target.search}`,
-          method: init?.method ?? "GET",
-          headers,
-        },
-        (res: IncomingMessage) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("end", () => {
-            const rawCookie = res.headers["set-cookie"];
-            const setCookie = Array.isArray(rawCookie)
-              ? (rawCookie[0] ?? null)
-              : (rawCookie ?? null);
-            resolve({
-              status: res.statusCode ?? 0,
-              body: Buffer.concat(chunks).toString("utf8"),
-              setCookie,
-            });
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: init?.method ?? "GET",
+        headers,
+      },
+      (res: IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const rawCookie = res.headers["set-cookie"];
+          const setCookie = Array.isArray(rawCookie) ? (rawCookie[0] ?? null) : (rawCookie ?? null);
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+            setCookie,
           });
-          res.on("error", reject);
-        },
-      );
-      req.on("error", reject);
-      if (body !== undefined) req.end(body);
-      else req.end();
-    }),
-    20_000,
-    `${init?.method ?? "GET"} ${target.pathname}`,
-  );
+        });
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    if (body !== undefined) req.end(body);
+    else req.end();
+  });
 }
 
 function sessionCookie(setCookie: string | null): string {
@@ -308,7 +291,7 @@ describe("personal mode auth", () => {
       await gateway.close();
       await rm(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   it("sets a Secure session cookie on register and login when RAILWAY_ENVIRONMENT is set", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "t3mc-auth-"));
@@ -342,7 +325,7 @@ describe("personal mode auth", () => {
       await gateway.close();
       await rm(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   it("fails closed when personal mode has no owner email", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "t3mc-auth-"));
@@ -408,7 +391,7 @@ describe("personal mode auth", () => {
       await gateway.close();
       await rm(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   it("serves the web dist when it exists and proxies when it does not", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "t3mc-static-"));

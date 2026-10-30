@@ -35,7 +35,7 @@ export function useMaxLogout(): () => Promise<void> {
 type AuthMode = "login" | "register";
 
 const fieldClass =
-  "w-full rounded border border-[#333] bg-[#0a0a0a] px-3 py-2 text-sm text-[#f5f5f5] outline-none placeholder:text-[#737373] focus:border-[#00ff41]";
+  "w-full rounded border border-(--max-form-border) bg-(--max-black) px-3 py-2 text-sm text-(--max-bright) outline-none placeholder:text-(--max-muted) focus:border-(--max-green)";
 
 /**
  * Outer door for the MAX session cookie. T3's own connection flow stays inside
@@ -133,8 +133,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] font-mono">
-        <p className="text-sm tracking-widest text-[#737373]">INITIALIZING...</p>
+      <div className="max-scope flex min-h-screen items-center justify-center bg-(--max-black) font-mono">
+        <p className="text-sm tracking-widest text-(--max-muted)">INITIALIZING...</p>
       </div>
     );
   }
@@ -148,21 +148,21 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] p-4 font-mono text-[#f5f5f5]">
+    <div className="max-scope flex min-h-screen items-center justify-center bg-(--max-black) p-4 font-mono text-(--max-bright)">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold tracking-wider text-[#00ff41]">MAX</h1>
-          <p className="mt-1 text-xs tracking-widest text-[#737373]">MULTI-MODEL AI CONSOLE</p>
+          <h1 className="text-2xl font-bold tracking-wider text-(--max-green)">MAX</h1>
+          <p className="mt-1 text-xs tracking-widest text-(--max-muted)">MULTI-MODEL AI CONSOLE</p>
         </div>
         <form
           onSubmit={(event) => void onSubmit(event)}
-          className="rounded border border-[#333] bg-[#111] p-6"
+          className="rounded border border-(--max-form-border) bg-(--max-panel) p-6"
         >
           <h2 className="mb-4 text-center text-xs font-semibold tracking-widest">
             {mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
           </h2>
           {mode === "register" ? (
-            <label className="mb-3 block text-[10px] tracking-widest text-[#737373]">
+            <label className="mb-3 block text-3xs/normal tracking-widest text-(--max-muted)">
               DISPLAY NAME (OPTIONAL)
               <input
                 type="text"
@@ -173,7 +173,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
               />
             </label>
           ) : null}
-          <label className="mb-3 block text-[10px] tracking-widest text-[#737373]">
+          <label className="mb-3 block text-3xs/normal tracking-widest text-(--max-muted)">
             EMAIL
             <input
               type="email"
@@ -185,7 +185,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
               className={`${fieldClass} mt-1`}
             />
           </label>
-          <label className="mb-3 block text-[10px] tracking-widest text-[#737373]">
+          <label className="mb-3 block text-3xs/normal tracking-widest text-(--max-muted)">
             PASSWORD
             <input
               type="password"
@@ -197,7 +197,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
             />
           </label>
           {mode === "register" ? (
-            <label className="mb-3 block text-[10px] tracking-widest text-[#737373]">
+            <label className="mb-3 block text-3xs/normal tracking-widest text-(--max-muted)">
               CONFIRM PASSWORD
               <input
                 type="password"
@@ -209,17 +209,17 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
               />
             </label>
           ) : null}
-          {error ? <p className="mb-3 text-xs text-[#ff5c5c]">{error}</p> : null}
+          {error ? <p className="mb-3 text-xs text-(--max-error)">{error}</p> : null}
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded bg-[#00ff41] px-3 py-2 text-xs font-bold tracking-widest text-[#0a0a0a] disabled:opacity-60"
+            className="w-full rounded bg-(--max-green) px-3 py-2 text-xs font-bold tracking-widest text-(--max-black) disabled:opacity-60"
           >
             {submitting ? "PLEASE WAIT" : mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
           </button>
           <button
             type="button"
-            className="mt-4 w-full text-[10px] tracking-widest text-[#737373]"
+            className="mt-4 w-full text-3xs/normal tracking-widest text-(--max-muted)"
             onClick={() => {
               setMode(mode === "login" ? "register" : "login");
               setError(null);

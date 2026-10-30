@@ -2,11 +2,14 @@
 // @effect-diagnostics globalTimers:off - Reconnect backoff and heartbeats are socket timers.
 // @effect-diagnostics globalDate:off - Heartbeat deadlines use wall-clock time.
 import * as NodeFS from "node:fs";
-import http from "node:http";
-import https from "node:https";
-import type { IncomingMessage } from "node:http";
-import type { ClientRequest } from "node:http";
-import { pathToFileURL } from "node:url";
+import * as NodeHttp from "node:http";
+const http = NodeHttp;
+import * as NodeHttps from "node:https";
+const https = NodeHttps;
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ClientRequest = NodeHttp.ClientRequest;
+import * as NodeURL from "node:url";
+const { pathToFileURL } = NodeURL;
 import { WebSocket, type RawData } from "ws";
 
 import { BearerTokenSource, type BearerTokenOptions } from "./bearerToken.ts";
@@ -130,8 +133,8 @@ function upstreamHeaders(
   headers: HeaderMap,
   host: string,
   token: string | null,
-): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {};
+): NodeHttp.OutgoingHttpHeaders {
+  const out: NodeHttp.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
     if (
@@ -213,7 +216,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
   }
 
   function failAllStreams(): void {
-    for (const streamId of [...streams.keys()]) failStream(streamId);
+    for (const streamId of streams.keys()) failStream(streamId);
   }
 
   function scheduleReconnect(): void {

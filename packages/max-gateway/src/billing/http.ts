@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Billing routes are plain Node handlers, not an HTTP framework.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ServerResponse = NodeHttp.ServerResponse;
 
 import { readSessionToken } from "../auth/cookies.ts";
 import type { AuthStore, StoredUser } from "../auth/store.ts";

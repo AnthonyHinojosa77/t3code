@@ -1,7 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - Startup opens the local account file and checks the web build directory.
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import * as NodeFS from "node:fs";
+const { existsSync } = NodeFS;
+import * as NodePath from "node:path";
+const path = NodePath;
+import * as NodeURL from "node:url";
+const { pathToFileURL } = NodeURL;
 
 import { isPersonalMode, readOwnerEmail, warnIfOwnerEmailMissing } from "./auth/personalMode.ts";
 import { openAuthStore, resolveAuthDbPath } from "./auth/store.ts";

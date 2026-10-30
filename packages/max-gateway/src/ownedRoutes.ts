@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owned routes answer the Node request the gateway already accepted.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ServerResponse = NodeHttp.ServerResponse;
 
 import { handleAuthHttp, isMaxAuthRoute, type AuthHttpContext } from "./auth/http.ts";
 import type { AuthStore } from "./auth/store.ts";

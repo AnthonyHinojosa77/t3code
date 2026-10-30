@@ -1,11 +1,5 @@
-/**
- * One binary WebSocket message is one tunnel frame:
- *   uint32be streamId | uint8 type | uint32be payloadLength | payload
- *
- * streamId 0 is only for ping/pong. Data streams start at 1.
- * HTTP bodies are a head frame plus chunk frames, never one buffered body.
- * A ws-message payload is flag byte (0 text, 1 binary) plus the raw frame.
- */
+/** Tunnel frame: uint32be streamId | uint8 type | uint32be payloadLength | payload.
+ * Stream 0 is ping/pong; HTTP uses head/chunk frames, WS a flag byte then raw data. */
 
 export const MAX_FRAME_PAYLOAD = 8 * 1024 * 1024;
 

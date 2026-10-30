@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Auth routes are plain Node handlers, not an HTTP framework.
 // @effect-diagnostics globalDate:off - Plan reset timestamps are wall-clock UTC, same as a daily cap window.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ServerResponse = NodeHttp.ServerResponse;
 
 import { readJsonBody, sendJson } from "../httpUtil.ts";
 import { PLANS, resolveEffectivePlan, type PlanId } from "../billing/plans.ts";
@@ -40,13 +42,8 @@ function currentUser(req: IncomingMessage, store: AuthStore): StoredUser | null 
   return store.readSession(token);
 }
 
-/**
- * Personal-mode plan-status.
- * `plan` is `"owner"`, which is not one of MAX's plan ids (`beta|alpha|omega|sigma`).
- * Caps are null. `monthlyCredits` and `creditsRemaining` are null here; MAX's
- * AccountPanel types those two as numbers. The other field names match that panel.
- * `user.plan` on `/api/auth/me` stays the stored plan id. Unlimited is this payload.
- */
+/** Personal plan-status uses "owner", null caps and null monthly credits.
+ * /api/auth/me retains the stored plan id; only this payload is unlimited. */
 function personalPlanStatus(user: StoredUser): Record<string, unknown> {
   const resets = new Date();
   resets.setUTCDate(resets.getUTCDate() + 1);
