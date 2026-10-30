@@ -27,16 +27,27 @@ function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments, isReady } = useEnvironments();
   const [maxMode, setMaxMode] = useMaxMode();
+  const { round } = Route.useSearch();
+  const navigate = Route.useNavigate();
 
   const view = resolveMaxIndexView({
-    mode: maxMode,
+    mode: round ? "council" : maxMode,
     hostedStatic: authGateState.status === "hosted-static",
     environmentsReady: isReady,
     environmentCount: environments.length,
   });
   if (view === "pending") return null;
   if (view === "hosted-empty") return <HostedEmptyState />;
-  if (view === "council") return <MaxAppShell onModeChange={setMaxMode} />;
+  if (view === "council")
+    return (
+      <MaxAppShell
+        onModeChange={(mode) => {
+          setMaxMode(mode);
+          if (mode === "agent") void navigate({ to: "/", search: {} });
+        }}
+        roundId={round}
+      />
+    );
   return <IndexDraftLanding />;
 }
 
@@ -117,5 +128,7 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
 }
 
 export const Route = createFileRoute("/_chat/")({
+  validateSearch: (search: Record<string, unknown>): { round?: string } =>
+    typeof search.round === "string" && search.round ? { round: search.round } : {},
   component: ChatIndexRouteView,
 });

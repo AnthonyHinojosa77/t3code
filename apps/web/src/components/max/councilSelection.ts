@@ -3,10 +3,12 @@ import { createModelSelection } from "@t3tools/shared/model";
 
 import { modelPickerModelKey } from "../chat/modelPickerKeys";
 
-/** A model that answers in a council round. Its traits stay at their defaults until rounds run. */
+/** A model that answers in a council round, with independent traits. */
 export interface CouncilContender {
   readonly instanceId: ProviderInstanceId;
   readonly model: string;
+  readonly options?: ModelSelection["options"];
+  readonly roleId?: string | null;
 }
 
 export interface CouncilSelection {
@@ -93,4 +95,19 @@ export function setCouncilSynthesizerOptions(
 
 export function clearCouncilSynthesizer(selection: CouncilSelection): CouncilSelection {
   return selection.synthesizer === null ? selection : { ...selection, synthesizer: null };
+}
+
+export function updateCouncilContender(
+  selection: CouncilSelection,
+  contender: CouncilContender,
+  patch: Pick<CouncilContender, "options" | "roleId">,
+): CouncilSelection {
+  return {
+    ...selection,
+    contenders: selection.contenders.map((entry) =>
+      councilContenderKey(entry) === councilContenderKey(contender)
+        ? { ...entry, ...patch }
+        : entry,
+    ),
+  };
 }

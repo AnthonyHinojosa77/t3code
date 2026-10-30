@@ -12,6 +12,7 @@ import {
   setCouncilSynthesizer,
   setCouncilSynthesizerOptions,
   toggleCouncilContender,
+  updateCouncilContender,
 } from "./councilSelection";
 
 const claude = ProviderInstanceId.make("claudeAgent");
@@ -129,4 +130,16 @@ describe("council synthesizer", () => {
     expect(cleared.contenders).toBe(selection.contenders);
     expect(clearCouncilSynthesizer(cleared)).toBe(cleared);
   });
+});
+
+it("keeps each contender's traits and role independent", () => {
+  const selected = pick([claude, "opus"], [codex, "gpt-5"]);
+  const updated = updateCouncilContender(selected, selected.contenders[0]!, {
+    options: effortHigh,
+    roleId: "critic",
+  });
+  expect(updated.contenders[0]?.options).toEqual(effortHigh);
+  expect(updated.contenders[0]?.roleId).toBe("critic");
+  expect(updated.contenders[1]).toBe(selected.contenders[1]);
+  expect(updated.synthesizer).toBeNull();
 });

@@ -10,38 +10,28 @@ import {
 } from "../../state/entities";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { SidebarInset } from "../ui/sidebar";
-import { EMPTY_COUNCIL_SELECTION } from "./councilSelection";
+
 import { MaxHeader } from "./MaxHeader";
-import { MaxPromptComposer } from "./MaxPromptComposer";
+import { MaxCouncilRounds } from "./MaxCouncilRounds";
 import type { MaxMode } from "./maxMode";
 
 const primaryButtonClass =
   "rounded-sm border border-(--max-green) px-3 py-1.5 text-xs text-(--max-green) hover:bg-(--max-green) hover:text-(--max-black) disabled:pointer-events-none disabled:opacity-50 motion-safe:transition-colors";
 
-/**
- * Council home at `/`. T3's sidebar stays beside it and still lists threads and projects.
- * Council rounds have no backend yet, so this shows an empty state rather than a fake list.
- */
-export function MaxAppShell({ onModeChange }: { readonly onModeChange: (mode: MaxMode) => void }) {
-  const [councilSelection, setCouncilSelection] = useState(EMPTY_COUNCIL_SELECTION);
+export function MaxAppShell({
+  onModeChange,
+  roundId,
+}: {
+  readonly onModeChange: (mode: MaxMode) => void;
+  readonly roundId?: string | undefined;
+}) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="max-scope flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         <MaxHeader mode="council" onModeChange={onModeChange} />
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 px-6 py-10 md:py-16">
-            <MaxPromptComposer
-              selection={councilSelection}
-              onSelectionChange={setCouncilSelection}
-            />
-            <section aria-labelledby="max-rounds-heading">
-              <h2 id="max-rounds-heading" className="text-sm font-semibold">
-                Council rounds
-              </h2>
-              <p className="mt-3 rounded-sm border border-dashed border-(--max-line-strong) px-4 py-6 text-center text-sm text-(--max-muted)">
-                No council rounds yet. They will appear here.
-              </p>
-            </section>
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-6 py-10 md:py-16">
+            <MaxCouncilRounds roundId={roundId} />
             <AgentModeEntry onModeChange={onModeChange} />
           </div>
         </div>

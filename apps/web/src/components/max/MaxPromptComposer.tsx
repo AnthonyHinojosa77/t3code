@@ -1,7 +1,7 @@
 import type { EnvironmentId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { XIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
@@ -26,22 +26,30 @@ import {
   setCouncilSynthesizer,
   setCouncilSynthesizerOptions,
   toggleCouncilContender,
+  updateCouncilContender,
   type CouncilContender,
   type CouncilSelection,
 } from "./councilSelection";
+
+import { councilApi, type CouncilTemplate } from "./councilApi";
+import { RoleTemplatePicker } from "./RoleTemplatePicker";
 
 type CouncilSelectionUpdate = (update: (selection: CouncilSelection) => CouncilSelection) => void;
 
 const SEND_REASON_ID = "max-council-send-reason";
 
-/**
- * Council prompt, contenders and Synthesizer. Rounds do not run yet, so Send stays off
- * and says why; nothing here pretends to submit.
- */
 export function MaxPromptComposer({
   selection,
   onSelectionChange,
+  templates,
+  apiError,
+  onRefresh,
+  onCreated,
 }: {
+  readonly templates: CouncilTemplate[];
+  readonly apiError: string | null;
+  readonly onRefresh: () => void;
+  readonly onCreated: (id: string, environmentId: EnvironmentId) => void;
   readonly selection: CouncilSelection;
   readonly onSelectionChange: CouncilSelectionUpdate;
 }) {
@@ -49,9 +57,64 @@ export function MaxPromptComposer({
   const threads = useThreadShells();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [prompt, setPrompt] = useState("");
-  // Same pick as T3's stock landing. Switching projects stays in Agent mode for now.
-  const project = sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null;
+  const [projectKey, setProjectKey] = useState("");
+  const [templateId, setTemplateId] = useState("meta-debate");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submitLock = useRef(false);
+  const project =
+    projects.find((entry) => `${entry.environmentId}:${entry.id}` === projectKey) ?? null;
   const environmentId = project?.environmentId ?? primaryEnvironmentId;
+  const availableProjects = sortScopedProjectsForSidebar(projects, threads, "updated_at").filter(
+    (entry) => entry.environmentId === environmentId,
+  );
+  const template = templates.find((entry) => entry.id === templateId) ?? templates[0];
+  const reason =
+    apiError ??
+    (templates.length === 0
+      ? "Connecting to council…"
+      : !prompt.trim()
+        ? "Enter a question."
+        : prompt.trim().length > 20000
+          ? "Keep your question under 20,000 characters."
+          : selection.contenders.length === 0
+            ? "Choose at least one contender."
+            : selection.contenders.length > 8
+              ? "Choose at most eight contenders."
+              : !selection.synthesizer
+                ? "Choose a synthesizer."
+                : !environmentId
+                  ? "Connect a computer."
+                  : null);
+  const submit = () => {
+    if (reason || submitLock.current || !template || !selection.synthesizer || !environmentId)
+      return;
+    submitLock.current = true;
+    setSubmitting(true);
+    setError(null);
+    void councilApi
+      .createRound({
+        prompt: prompt.trim(),
+        projectId: project?.id ?? null,
+        templateId: template.id,
+        contenders: selection.contenders.map((entry, index) => ({
+          ...entry,
+          roleId:
+            entry.roleId === undefined
+              ? (template.roles[index % template.roles.length]?.id ?? null)
+              : entry.roleId,
+        })),
+        synthesizer: selection.synthesizer,
+      })
+      .then(({ round }) => onCreated(round.id, environmentId))
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : "Couldn’t start council");
+      })
+      .finally(() => {
+        submitLock.current = false;
+        setSubmitting(false);
+      });
+  };
 
   return (
     <section aria-labelledby="max-council-heading">
@@ -74,10 +137,23 @@ export function MaxPromptComposer({
           className="block min-h-24 w-full resize-y bg-transparent px-3 py-2.5 text-sm leading-relaxed outline-none placeholder:text-(--max-muted)"
         />
         <div className="border-t border-(--max-line) px-3 py-2.5">
+          <RoleTemplatePicker
+            templates={templates}
+            value={template?.id ?? ""}
+            onRefresh={onRefresh}
+            onChange={(id) => {
+              setTemplateId(id);
+              onSelectionChange((current) => ({
+                ...current,
+                contenders: current.contenders.map(({ roleId: _, ...entry }) => entry),
+              }));
+            }}
+          />
           {environmentId === null ? (
             <p className="text-xs text-(--max-muted)">Connect a computer to choose models.</p>
           ) : (
             <CouncilModelControls
+              template={template}
               environmentId={environmentId}
               projectId={project?.id ?? null}
               selection={selection}
@@ -86,22 +162,36 @@ export function MaxPromptComposer({
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-(--max-line) px-3 py-2.5">
-          <p className="min-w-0 text-xs text-(--max-muted)">
-            {project === null
-              ? "No project yet."
-              : `Project: ${project.title}. Switch projects in Agent mode.`}
-          </p>
+          <label className="text-xs">
+            Project folder
+            <select
+              aria-label="Project folder"
+              value={projectKey}
+              onChange={(event) => setProjectKey(event.target.value)}
+            >
+              <option value="">No project</option>
+              {availableProjects.map((entry) => (
+                <option
+                  key={`${entry.environmentId}:${entry.id}`}
+                  value={`${entry.environmentId}:${entry.id}`}
+                >
+                  {entry.title}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="flex items-center gap-3">
             <p id={SEND_REASON_ID} className="text-xs text-(--max-muted)">
-              Council rounds can’t run yet, so sending is off.
+              {error ?? reason}
             </p>
             <button
               type="button"
-              disabled
+              disabled={reason !== null || submitting}
+              onClick={() => void submit()}
               aria-describedby={SEND_REASON_ID}
-              className="rounded-sm border border-(--max-line-strong) px-3 py-1.5 text-xs text-(--max-muted) disabled:cursor-not-allowed"
+              className="max-council-button disabled:cursor-not-allowed"
             >
-              Send to council
+              {submitting ? "Starting…" : "Send to council"}
             </button>
           </div>
         </div>
@@ -112,10 +202,12 @@ export function MaxPromptComposer({
 
 function CouncilModelControls({
   environmentId,
+  template,
   projectId,
   selection,
   onSelectionChange,
 }: {
+  readonly template: CouncilTemplate | undefined;
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
   readonly selection: CouncilSelection;
@@ -195,7 +287,6 @@ function CouncilModelControls({
           }
         />
         {synthesizer && synthesizerEntry ? (
-          // Only the Synthesizer has traits for now; contenders keep their defaults until rounds run.
           <TraitsPicker
             provider={synthesizerEntry.driverKind}
             instanceId={synthesizer.instanceId}
@@ -215,14 +306,55 @@ function CouncilModelControls({
           <p className="text-xs text-(--max-muted)">No contenders picked yet.</p>
         ) : (
           <ul aria-label="Contenders" className="flex flex-wrap gap-1.5">
-            {selection.contenders.map((contender) => {
+            {selection.contenders.map((contender, index) => {
+              const entry = entries.find((entry) => entry.instanceId === contender.instanceId);
               const label = describe(contender);
               return (
                 <li
                   key={councilContenderKey(contender)}
                   className="inline-flex items-center gap-1 rounded-sm border border-(--max-line-strong) py-0.5 pr-0.5 pl-2 text-xs"
                 >
-                  {label}
+                  <span>{label}</span>
+                  {entry && (
+                    <TraitsPicker
+                      provider={entry.driverKind}
+                      instanceId={contender.instanceId}
+                      models={entry.models}
+                      model={contender.model}
+                      modelOptions={contender.options ?? []}
+                      allowPromptInjectedEffort={false}
+                      planModeEnabled={settings.planModeEnabled}
+                      onModelOptionsChange={(options) =>
+                        onSelectionChange((current) =>
+                          updateCouncilContender(current, contender, { options }),
+                        )
+                      }
+                    />
+                  )}
+                  {!!template?.roles.length && (
+                    <select
+                      aria-label={`Role for ${label}`}
+                      value={
+                        contender.roleId === undefined
+                          ? (template.roles[index % template.roles.length]?.id ?? "")
+                          : (contender.roleId ?? "")
+                      }
+                      onChange={(event) =>
+                        onSelectionChange((current) =>
+                          updateCouncilContender(current, contender, {
+                            roleId: event.target.value || null,
+                          }),
+                        )
+                      }
+                    >
+                      <option value="">No role</option>
+                      {template.roles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     type="button"
                     aria-label={`Remove ${label}`}
