@@ -4,7 +4,7 @@
   padding: 0.5rem 0.65rem;
   font-size: 0.75rem;
   color: var(--max-green);
-  min-height: 36px;
+  min-height: 40px;
 }
 .max-scope .max-council-button:disabled {
   color: var(--max-muted);
@@ -15,7 +15,7 @@
 }
 .max-scope :is(select, input) {
   max-width: 100%;
-  min-height: 36px;
+  min-height: 40px;
   border: 1px solid var(--max-line-strong);
   border-radius: 3px;
   padding: 0.35rem;
@@ -98,4 +98,19 @@
 
 .max-council-card > .max-council-answer {
   min-height: 8rem;
+}
+
+.max-scope .max-council-send:not(:disabled) {
+  background: var(--max-green);
+  border-color: var(--max-green);
+  color: var(--max-black);
+  font-weight: 700;
+}
+.max-scope .max-council-models button {
+  min-height: 40px;
+  min-width: 40px;
+}
+.max-scope .max-council-models li {
+  max-width: 100%;
+  flex-wrap: wrap;
 }

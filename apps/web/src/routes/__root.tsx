@@ -14,7 +14,6 @@ import { Check, Copy } from "lucide";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
-import { MaxAuthGate } from "../components/max/MaxAuthGate";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
@@ -129,18 +128,15 @@ function RootRouteNotFoundView() {
 }
 
 function RootRouteView() {
-  // MAX login is the outer door. T3's authGateState and pair flow stay in beforeLoad
-  // and in RootRouteBranch, and this wrapper does not change them.
+  // MAX authenticates before this router and its environment services are loaded.
   // Above every branch: app services raise toasts for the whole page, so the surface they write to
   // must not unmount when the root switches branches (for example /welcome to the app shell).
   return (
-    <MaxAuthGate>
-      <ToastProvider>
-        <AnchoredToastProvider>
-          <RootRouteBranch />
-        </AnchoredToastProvider>
-      </ToastProvider>
-    </MaxAuthGate>
+    <ToastProvider>
+      <AnchoredToastProvider>
+        <RootRouteBranch />
+      </AnchoredToastProvider>
+    </ToastProvider>
   );
 }
 

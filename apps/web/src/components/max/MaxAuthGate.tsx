@@ -83,7 +83,9 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   const logout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+    const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    await response.text();
+    if (!response.ok) throw new Error("Could not sign out. Try again.");
     setUser(null);
     setEmail("");
     setPassword("");
@@ -118,8 +120,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
         setError(data.error ?? `Request failed: ${response.status}`);
         return;
       }
-      // Reload so T3's bootstrap runs again, now with the MAX cookie and the Mini's bearer.
-      window.location.assign("/");
+      // Start T3 only after the credentials response has been fully consumed.
+      await refreshUser();
     };
     // Promise handlers, not try/finally: React Compiler cannot lower a `finally` clause.
     await sendCredentials()
@@ -213,7 +215,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded bg-(--max-green) px-3 py-2 text-xs font-bold tracking-widest text-(--max-black) disabled:opacity-60"
+            className="min-h-10 w-full rounded bg-(--max-green) px-3 py-2 text-xs font-bold tracking-widest text-(--max-black) disabled:opacity-60"
           >
             {submitting ? "PLEASE WAIT" : mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
           </button>

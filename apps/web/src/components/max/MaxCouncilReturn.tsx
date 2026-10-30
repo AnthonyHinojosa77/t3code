@@ -22,7 +22,7 @@ export function MaxCouncilReturn({ className }: { readonly className?: string })
         )
       }
       className={cn(
-        "max-scope inline-flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-(--max-line-strong) px-2 text-xs text-(--max-green) hover:border-(--max-green) focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-(--max-green) motion-safe:transition-colors",
+        "max-scope inline-flex h-10 sm:h-7 shrink-0 items-center gap-1.5 rounded-sm border border-(--max-line-strong) px-2 text-xs text-(--max-green) hover:border-(--max-green) focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-(--max-green) motion-safe:transition-colors",
         className,
       )}
     >
