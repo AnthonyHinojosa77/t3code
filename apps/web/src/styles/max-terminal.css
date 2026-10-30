@@ -58,8 +58,10 @@
   --contrast-popover-foreground: var(--max-light);
   --contrast-primary: var(--max-green);
 }
-/* T3's 64% disabled opacity lands just under MAX's 3:1 floor on T3's light surfaces. */
-:root:not(.dark) button:disabled {
+/* In MAX's light Agent mode, T3's 64% disabled opacity puts the branch picker's label just under
+   the 3:1 floor. Desktop T3 never sets data-max-app, so it keeps its own look. */
+:root[data-max-app]:not(.dark)
+  [data-slot="combobox-trigger"]:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.72;
 }
 :root[data-max-default-theme] {

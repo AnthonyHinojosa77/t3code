@@ -1593,8 +1593,17 @@ try {
       await expect(
         page
           .locator('[data-message-role="assistant"]')
-          // Link chips render an icon and extra whitespace, so match the opening words only.
-          .filter({ hasText: renderedAnswer.trim().replace(/\s+/g, " ").slice(0, 40) })
+          // Rendered text and DOM text differ only in whitespace around blocks and link chips.
+          .filter({
+            hasText: new RegExp(
+              renderedAnswer
+                .trim()
+                .split(/\s+/)
+                .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+                .join("\\s*"),
+              "i",
+            ),
+          })
           .first(),
       ).toBeVisible();
     });
