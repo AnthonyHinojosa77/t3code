@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { openAuthStore, type AuthStore } from "../src/auth/store.ts";
 import { BearerTokenSource, sessionIssueArgs } from "../src/bearerToken.ts";
 import { startMiniCompanion, type RunningMiniCompanion } from "../src/miniCompanion.ts";
-import { maximusSessionOwnerAuth } from "../src/ownerAuth.ts";
+import { isOwnerSession, maximusSessionOwnerAuth } from "../src/ownerAuth.ts";
 import { classifyPath, startTunnelServer, type RunningTunnelServer } from "../src/tunnelServer.ts";
 
 const SECRET = "task0-test-secret";
@@ -262,6 +262,8 @@ interface Stack {
   readonly gateway: RunningTunnelServer;
   readonly upstream: Upstream;
   readonly sessionToken: string;
+  /** A valid session for an account that is not the owner. */
+  readonly otherSessionToken: string;
   readonly companion?: RunningMiniCompanion;
   close: () => Promise<void>;
 }
@@ -285,6 +287,12 @@ async function startStack(options?: {
     displayName: "Owner",
   });
   const session = auth.createSession(owner.id);
+  const other = auth.insertUser({
+    email: "someone@example.com",
+    passwordHash: "task0-not-a-login",
+    displayName: "Someone",
+  });
+  const otherSession = auth.createSession(other.id);
   const gateway = await startTunnelServer({
     host: "127.0.0.1",
     tunnelSecret: SECRET,
@@ -292,7 +300,9 @@ async function startStack(options?: {
     ownerEmail: "owner@example.com",
     webDist: options?.webDist ?? null,
     authStore: auth,
-    isOwnerRequest: maximusSessionOwnerAuth((token) => auth.readSession(token) !== null),
+    isOwnerRequest: maximusSessionOwnerAuth(
+      isOwnerSession((token) => auth.readSession(token), "owner@example.com"),
+    ),
     ...(options?.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
   });
   const previousToken = process.env.MAX_COMPANION_BEARER_TOKEN;
@@ -317,6 +327,7 @@ async function startStack(options?: {
     gateway,
     upstream,
     sessionToken: session.token,
+    otherSessionToken: otherSession.token,
     ...(companion ? { companion } : {}),
     close: async () => {
       if (previousToken === undefined) delete process.env.MAX_COMPANION_BEARER_TOKEN;
@@ -438,6 +449,40 @@ describe("max gateway tunnel", () => {
       expect(owned.status).toBe(200);
       expect(billing.status).toBe(403);
       expect(stack.upstream.requests).toHaveLength(0);
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it("rejects another account's valid session on HTTP and websocket routes", async () => {
+    const stack = await startStack();
+    try {
+      const http = await sendHttp(`${stack.gateway.url}/attachments/file.bin`, {
+        headers: ownerHeaders(stack.otherSessionToken),
+      });
+      expect(http.status).toBe(401);
+      const council = await sendHttp(`${stack.gateway.url}/api/council/rounds`, {
+        headers: ownerHeaders(stack.otherSessionToken),
+      });
+      expect(council.status).toBe(401);
+      const status = await withTimeout(
+        new Promise<number>((resolve, reject) => {
+          const client = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws`, {
+            headers: ownerHeaders(stack.otherSessionToken),
+          });
+          client.once("unexpected-response", (_request, response) => {
+            resolve(response.statusCode ?? 0);
+            client.terminate();
+          });
+          client.once("open", () => reject(new Error("non-owner websocket opened")));
+          client.once("error", () => {});
+        }),
+        3_000,
+        "non-owner websocket rejected",
+      );
+      expect(status).toBe(401);
+      expect(stack.upstream.requests).toHaveLength(0);
+      expect(stack.upstream.upgradeRequests).toHaveLength(0);
     } finally {
       await stack.close();
     }

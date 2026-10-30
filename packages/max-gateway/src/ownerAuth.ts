@@ -20,10 +20,7 @@ export function readCookie(header: string | undefined, name: string): string | u
   return undefined;
 }
 
-/**
- * Task 0 owner check. Task 1 replaces `isValidSession` with the real
- * `maximus_session` lookup. Missing or unknown cookies are not the owner.
- */
+/** Reads the `maximus_session` cookie; a missing cookie or failed check is not the owner. */
 export function maximusSessionOwnerAuth(
   isValidSession: (session: string) => boolean | Promise<boolean>,
   cookieName = "maximus_session",
