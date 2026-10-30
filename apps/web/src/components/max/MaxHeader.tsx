@@ -4,6 +4,7 @@ import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { useMaxLogout } from "./MaxAuthGate";
+import { MaxThemeToggle } from "./MaxThemeToggle";
 import type { MaxMode } from "./maxMode";
 
 const MODE_OPTIONS: ReadonlyArray<{ readonly mode: MaxMode; readonly label: string }> = [
@@ -11,7 +12,11 @@ const MODE_OPTIONS: ReadonlyArray<{ readonly mode: MaxMode; readonly label: stri
   { mode: "agent", label: "Agent" },
 ];
 
-/** MAX top bar. T3's header handles the titlebar drag area, safe area and sidebar toggle inset. */
+/**
+ * MAX top bar. T3's header handles the titlebar drag area, safe area and sidebar toggle inset.
+ * When the side panel is docked and open its header carries the wordmark, so this one hides its
+ * own (see `council.css`): one MAX on screen.
+ */
 export function MaxHeader({
   mode,
   onModeChange,
@@ -22,18 +27,14 @@ export function MaxHeader({
   const logout = useMaxLogout();
 
   return (
-    <WorkspacePageHeader electron={isElectron} className="gap-2 border-b border-(--max-line)">
+    <WorkspacePageHeader electron={isElectron} className="max-header gap-2">
       <div className="flex min-w-0 flex-1 items-baseline gap-3">
         <span className="max-wordmark shrink-0 text-lg font-bold">MAX</span>
-        <span className="hidden truncate text-xs text-(--max-muted) sm:inline">
+        <span className="max-desk-only truncate text-xs text-(--max-muted)">
           Multi-Model AI Console
         </span>
       </div>
-      <div
-        role="group"
-        aria-label="Mode"
-        className="flex shrink-0 rounded-sm border border-(--max-line-strong) p-0.5"
-      >
+      <div role="group" aria-label="Mode" className="max-segmented">
         {MODE_OPTIONS.map((option) => {
           const pressed = option.mode === mode;
           return (
@@ -44,25 +45,22 @@ export function MaxHeader({
               onClick={() => {
                 if (!pressed) onModeChange(option.mode);
               }}
-              className={cn(
-                "min-h-10 min-w-10 rounded-xs px-2.5 py-1 text-xs motion-safe:transition-colors",
-                pressed
-                  ? "bg-(--max-darker) text-(--max-green)"
-                  : "text-(--max-muted) hover:text-(--max-light)",
-              )}
+              className={cn("max-segment", pressed && "max-segment-active")}
             >
               {option.label}
             </button>
           );
         })}
       </div>
+      <MaxThemeToggle />
       <button
         type="button"
         onClick={() => void logout()}
-        className="flex min-h-10 min-w-10 shrink-0 items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-(--max-muted) hover:text-(--max-light) motion-safe:transition-colors"
+        className="max-icon-button"
+        aria-label="Sign out"
       >
-        <LogOutIcon aria-hidden="true" className="size-3.5" />
-        <span className="max-sm:sr-only">Sign out</span>
+        <LogOutIcon aria-hidden="true" className="size-4" />
+        <span className="max-desk-only text-xs">Sign out</span>
       </button>
     </WorkspacePageHeader>
   );

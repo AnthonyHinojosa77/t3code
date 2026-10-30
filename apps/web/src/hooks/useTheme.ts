@@ -336,6 +336,7 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
   );
   applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
+  document.documentElement.toggleAttribute("data-max-app", APP_BASE_NAME === "MAX");
   document.documentElement.toggleAttribute(
     "data-max-default-theme",
     APP_BASE_NAME === "MAX" && theme === "dark" && resolvedAppearance === "dark",

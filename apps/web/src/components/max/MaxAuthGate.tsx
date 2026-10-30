@@ -1,4 +1,6 @@
 import { resumeMaxSessionTransport, stopMaxSessionServices } from "./maxSessionTransport";
+import { MaxBootScreen } from "./MaxBootScreen";
+import { MaxThemeToggleButton } from "./MaxThemeToggleButton";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   createContext,
@@ -34,6 +36,35 @@ export function useMaxLogout(): () => Promise<void> {
 }
 
 type AuthMode = "login" | "register";
+
+const APPEARANCE_MODE_KEY = "t3code:theme-appearance-mode";
+
+/**
+ * The sign-in screen loads before T3's theme module (importing it would open the engine socket
+ * before MAX login), so it writes the same preference key and flips the document class itself.
+ * The signed-in app applies the stored preference when it loads.
+ */
+function LoginThemeToggle() {
+  const [light, setLight] = useState(
+    () => typeof document !== "undefined" && !document.documentElement.classList.contains("dark"),
+  );
+  return (
+    <MaxThemeToggleButton
+      light={light}
+      className="absolute top-[calc(env(safe-area-inset-top)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)]"
+      onToggle={() => {
+        const next = !light;
+        try {
+          localStorage.setItem(APPEARANCE_MODE_KEY, next ? "light" : "dark");
+        } catch {
+          /* Private mode: the choice still applies to this page. */
+        }
+        document.documentElement.classList.toggle("dark", !next);
+        setLight(next);
+      }}
+    />
+  );
+}
 
 const fieldClass =
   "w-full rounded border border-(--max-form-border) bg-(--max-black) px-3 py-2 text-sm text-(--max-bright) outline-none placeholder:text-(--max-muted) focus:border-(--max-green)";
@@ -142,13 +173,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
       });
   }
 
-  if (loading) {
-    return (
-      <div className="max-scope flex min-h-screen items-center justify-center bg-(--max-black) font-mono">
-        <p className="text-sm tracking-widest text-(--max-muted)">INITIALIZING...</p>
-      </div>
-    );
-  }
+  // The same screen index.html painted before React: no second loading look.
+  if (loading) return <MaxBootScreen />;
 
   if (user) {
     return (
@@ -159,10 +185,11 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="max-scope flex min-h-screen items-center justify-center bg-(--max-black) p-4 font-mono text-(--max-bright)">
+    <div className="max-scope relative flex min-h-screen items-center justify-center bg-(--max-black) p-4 font-mono text-(--max-bright)">
+      <LoginThemeToggle />
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold tracking-wider text-(--max-green)">MAX</h1>
+          <h1 className="max-wordmark text-2xl font-bold">MAX</h1>
           <p className="mt-1 text-xs tracking-widest text-(--max-muted)">MULTI-MODEL AI CONSOLE</p>
         </div>
         <form

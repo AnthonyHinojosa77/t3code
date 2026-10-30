@@ -198,3 +198,51 @@ it("serializes continue behind an unfinished archive", async () => {
   expect(f.store.get(r.id).contenders[0]?.continuedAt).toBeTruthy();
   expect(f.engine.unarchives).toEqual([id]);
 });
+
+describe("council attachments", () => {
+  const attachment = {
+    type: "image" as const,
+    id: "pending_abc-123",
+    name: "chart.png",
+    mimeType: "image/png",
+    sizeBytes: 1234,
+  };
+  it("passes each contender's own pending uploads to its launch and never to synthesis", async () => {
+    using f = fixture();
+    const r = f.coordinator.create({
+      ...input,
+      contenders: [
+        { ...input.contenders[0], attachments: [attachment] },
+        { ...input.contenders[1], attachments: [{ ...attachment, id: "pending_def-456" }] },
+      ],
+    });
+    await Promise.resolve();
+    expect(f.engine.launches[0]?.attachments).toEqual([attachment]);
+    expect(f.engine.launches[1]?.attachments?.[0]?.id).toBe("pending_def-456");
+    expect(f.store.get(r.id).contenders[0]?.attachments).toEqual([attachment]);
+    for (const c of r.contenders) f.engine.update(c.threadId!, "complete");
+    await Promise.resolve();
+    expect(f.engine.launches[2]?.attachments).toBeUndefined();
+  });
+  it("defaults to no attachments and rejects malformed ones", async () => {
+    using f = fixture();
+    const r = f.coordinator.create(input);
+    await Promise.resolve();
+    expect(f.engine.launches[0]?.attachments).toEqual([]);
+    expect(r.contenders[0]?.attachments).toEqual([]);
+    for (const bad of [
+      [{ ...attachment, id: "../etc" }],
+      [{ ...attachment, type: "video" }],
+      [{ ...attachment, sizeBytes: 1.5 }],
+      [{ ...attachment, name: "" }],
+      "nope",
+      Array.from({ length: 101 }, () => attachment),
+    ])
+      expect(() =>
+        f.coordinator.create({
+          ...input,
+          contenders: [{ ...input.contenders[0], attachments: bad }],
+        }),
+      ).toThrow("Invalid council round");
+  });
+});

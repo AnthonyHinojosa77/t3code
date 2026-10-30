@@ -1,10 +1,20 @@
 import type { ModelSelection } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
+import { useStableCallback } from "../../hooks/useStableCallback";
+
 export interface CouncilModelInput {
   instanceId: string;
   model: string;
   options?: ModelSelection["options"] | null;
+}
+/** A pending engine upload. Each contender gets its own copy: the engine claims an upload once. */
+export interface CouncilAttachmentMeta {
+  type: "image" | "file";
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
 }
 export interface CouncilRole {
   id: string;
@@ -27,7 +37,10 @@ export interface CouncilRoundInput {
   prompt: string;
   templateId: string;
   projectId: string | null;
-  contenders: (CouncilModelInput & { roleId?: string | null })[];
+  contenders: (CouncilModelInput & {
+    roleId?: string | null;
+    attachments?: CouncilAttachmentMeta[];
+  })[];
   synthesizer: CouncilModelInput;
 }
 export type ContenderStatus =
@@ -51,6 +64,8 @@ export interface CouncilContenderState extends AnswerState {
   key: string;
   roleId: string | null;
   roleName: string | null;
+  /** Absent on rounds saved before attachments existed. */
+  attachments?: CouncilAttachmentMeta[];
   status: ContenderStatus;
 }
 export interface CouncilStructuredSynthesis {
@@ -152,12 +167,13 @@ export const councilApi = {
 export function isRoundActive(status: RoundStatus) {
   return status === "running" || status === "synthesizing";
 }
-export function useCouncilRound(id: string | undefined) {
+export function useCouncilRound(id: string | undefined, onRound?: (round: CouncilRound) => void) {
   const [state, setState] = useState<{
     id?: string;
     round: CouncilRound | null;
     error: string | null;
   }>({ round: null, error: null });
+  const notifyRound = useStableCallback((round: CouncilRound) => onRound?.(round));
   // oxlint-disable-next-line t3code/react-effect-budget -- Poll the external coordinator while visible; abort HTTP and timers on cleanup.
   useEffect(() => {
     if (!id) return;
@@ -174,6 +190,7 @@ export function useCouncilRound(id: string | undefined) {
         if (stopped || requestController.signal.aborted) return;
         terminal = !isRoundActive(round.status);
         setState({ id, round, error: null });
+        notifyRound(round);
       } catch (error) {
         if (stopped || requestController.signal.aborted) return;
         setState((previous) => ({
@@ -198,6 +215,6 @@ export function useCouncilRound(id: string | undefined) {
       controller?.abort();
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [id]);
+  }, [id, notifyRound]);
   return state.id === id ? state : { round: null, error: null };
 }

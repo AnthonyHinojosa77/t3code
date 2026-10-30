@@ -15,7 +15,35 @@ import {
   type CouncilModelInput,
   type CouncilContenderState,
   type CouncilSynthesisState,
+  type CouncilAttachment,
 } from "./types.ts";
+const MAX_ATTACHMENTS = 100;
+const ATTACHMENT_ID = /^[a-z0-9_-]{1,128}$/i;
+function validAttachments(v: unknown): v is CouncilAttachment[] | undefined {
+  if (v === undefined) return true;
+  return (
+    Array.isArray(v) &&
+    v.length <= MAX_ATTACHMENTS &&
+    v.every((a: unknown) => {
+      if (!a || typeof a !== "object") return false;
+      const m = a as Record<string, unknown>;
+      return (
+        (m.type === "image" || m.type === "file") &&
+        typeof m.id === "string" &&
+        ATTACHMENT_ID.test(m.id) &&
+        typeof m.name === "string" &&
+        !!m.name.trim() &&
+        m.name.length <= 255 &&
+        typeof m.mimeType === "string" &&
+        !!m.mimeType.trim() &&
+        m.mimeType.length <= 100 &&
+        typeof m.sizeBytes === "number" &&
+        Number.isInteger(m.sizeBytes) &&
+        m.sizeBytes >= 0
+      );
+    })
+  );
+}
 const terminal = (s: string) =>
   ["complete", "failed", "timed-out", "cancelled", "skipped"].includes(s);
 export function parseSynthesis(text: string): CouncilStructuredSynthesis | null {
@@ -168,6 +196,7 @@ export class CouncilCoordinator {
       v.contenders.length < 1 ||
       v.contenders.length > 8 ||
       !v.contenders.every(validModel) ||
+      !v.contenders.every((c) => validAttachments(c.attachments)) ||
       !validModel(v.synthesizer)
     )
       throw new CouncilError(400, "Invalid council round");
@@ -210,6 +239,13 @@ export class CouncilCoordinator {
         options: c.options ?? null,
         roleId: c.roleId ?? null,
         roleName: t.roles.find((r) => r.id === c.roleId)?.name ?? null,
+        attachments: (c.attachments ?? []).map((a) => ({
+          type: a.type,
+          id: a.id,
+          name: a.name,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+        })),
       })),
       synthesis: {
         ...base,
@@ -334,6 +370,7 @@ export class CouncilCoordinator {
         projectId: r.projectId,
         model: state,
         prompt,
+        ...(synthesis ? {} : { attachments: (state as CouncilContenderState).attachments ?? [] }),
         onRuntimeMode: (mode) => {
           if (!disposed) {
             state.runtimeMode = mode;

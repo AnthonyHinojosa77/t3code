@@ -20,8 +20,18 @@ export interface CouncilTemplate {
   roles: CouncilRole[];
   synthesizerInstruction: string;
 }
+/** Metadata for a pending engine upload; the engine claims the bytes when the thread launches. */
+export interface CouncilAttachment {
+  type: "image" | "file";
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+}
 export interface CouncilContenderInput extends CouncilModelInput {
   roleId?: string | null;
+  /** One pending upload per contender: the engine moves each upload into exactly one thread. */
+  attachments?: CouncilAttachment[];
 }
 export interface CouncilRoundInput {
   prompt: string;
@@ -43,6 +53,8 @@ export interface CouncilContenderState extends CouncilModelInput {
   options: ModelSelectionOptions | null;
   roleId: string | null;
   roleName: string | null;
+  /** Absent on rounds saved before attachments existed. */
+  attachments?: CouncilAttachment[];
   runtimeMode?: CouncilRuntimeMode | null;
   threadId: string | null;
   status: ContenderStatus;

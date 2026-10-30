@@ -708,6 +708,7 @@ export function BranchToolbarBranchSelector({
           onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
         >
           <ComboboxTrigger
+            data-max-branch-picker=""
             render={
               displayMode === "panel" ? (
                 <ThreadDetailsControl part="select" />

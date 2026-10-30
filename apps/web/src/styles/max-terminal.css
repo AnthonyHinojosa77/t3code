@@ -4,23 +4,31 @@
   .max-scope {
     background-color: var(--max-black);
     color: var(--max-light);
-    font-family:
-      "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--max-font);
     color-scheme: dark;
+  }
+  :root:not(.dark) .max-scope {
+    color-scheme: light;
   }
 
   /* The one bold moment: CRT glow on the wordmark only. */
   .max-scope .max-wordmark {
     color: var(--max-green);
     letter-spacing: 0.2em;
-    text-shadow:
-      0 0 4px rgba(0, 255, 65, 0.6),
-      0 0 8px rgba(0, 255, 65, 0.3),
-      0 0 16px rgba(0, 255, 65, 0.1);
+    text-shadow: var(--max-wordmark-glow);
   }
 
-  .max-scope :focus-visible {
-    outline: 1px solid var(--max-green);
+  /* Keyboard focus: one quiet ring that follows each control's rounded shape. It appears only
+     after real keyboard use (data-max-input, see maxInputModality.ts), never after a tap or when
+     a script moves focus. T3's own ring on its buttons is turned off inside MAX. */
+  .max-scope :focus-visible,
+  :root:has(.max-scope) [data-slot="sidebar-trigger"]:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+  html[data-max-input="keyboard"] .max-scope :focus-visible,
+  html[data-max-input="keyboard"]:has(.max-scope) [data-slot="sidebar-trigger"]:focus-visible {
+    outline: 2px solid var(--max-focus);
     outline-offset: 2px;
   }
 
@@ -32,7 +40,7 @@
 }
 
 /* Portals live beside the application root. Carry MAX tokens to that root while
-   a council/auth surface is mounted, including when the OS prefers light. */
+   a council/auth surface is mounted, in either appearance. */
 :root:has(.max-scope)
   :is(
     [data-slot="popover-popup"],
@@ -50,6 +58,11 @@
   --contrast-popover-foreground: var(--max-light);
   --contrast-primary: var(--max-green);
 }
+/* In MAX's light Agent mode, T3's 64% disabled opacity puts the branch picker's label just under
+   the 3:1 floor. Desktop T3 never sets data-max-app, so it keeps its own look. */
+:root[data-max-app]:not(.dark) [data-max-branch-picker]:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.72;
+}
 :root[data-max-default-theme] {
   --primary: var(--max-green) !important;
   --primary-foreground: var(--max-black) !important;
@@ -64,7 +77,10 @@
 .max-scope,
 :root[data-max-default-theme],
 :root:has(.max-scope) {
+  --max-font:
+    "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --max-black: #0a0a0a;
+  --max-canvas: #0a0a0a;
   --max-darker: #1a1a1a;
   --max-line: #2a2a2a;
   --max-line-strong: #3a3a3a;
@@ -75,9 +91,21 @@
   --max-amber: #ffb000;
   --max-bright: #f5f5f5;
   --max-panel: #111111;
+  --max-page: #111111;
+  --max-page-edge: #151515;
   --max-form-border: #333333;
   --max-track: #222222;
   --max-error: #ff5c5c;
+  --max-on-accent: #0a0a0a;
+  --max-titlebar: transparent;
+  --max-titlebar-text: var(--max-light);
+  --max-wordmark-glow:
+    0 0 4px rgba(0, 255, 65, 0.6), 0 0 8px rgba(0, 255, 65, 0.3), 0 0 16px rgba(0, 255, 65, 0.1);
+  /* Focus ring: softened green on dark (still over 3:1 on every MAX surface), navy on light. */
+  --max-focus: color-mix(in srgb, var(--max-green) 72%, transparent);
+  --max-radius: 6px;
+  --max-bevel-raised: none;
+  --max-bevel-inset: none;
 
   --background: var(--max-black);
   --foreground: var(--max-light);
@@ -86,7 +114,7 @@
   --popover: var(--max-panel);
   --popover-foreground: var(--max-light);
   --primary: var(--max-green);
-  --primary-foreground: var(--max-black);
+  --primary-foreground: var(--max-on-accent);
   --secondary: var(--max-darker);
   --secondary-foreground: var(--max-light);
   --muted: var(--max-darker);
@@ -107,6 +135,51 @@
   --toolbar-control: var(--max-panel);
   --toolbar-control-foreground: var(--max-light);
   --toolbar-control-hover: var(--max-line);
+}
+
+/* Old MAX's Light Mode: the Windows 98 palette. Chrome gray surfaces, white paper, navy accent,
+   teal desktop behind the window on wide screens. Every pair below clears WCAG AA at text size. */
+:root:not(.dark) .max-scope,
+:root:not(.dark):has(.max-scope) {
+  --max-font: "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Geneva, Verdana, sans-serif;
+  --max-black: #c0c0c0;
+  --max-canvas: #008080;
+  --max-darker: #dfdfdf;
+  --max-line: #8a8a8a;
+  --max-line-strong: #404040;
+  --max-light: #000000;
+  --max-muted: #3a3a3a;
+  --max-green: #000080;
+  --max-amber: #7a3b00;
+  --max-bright: #000000;
+  --max-panel: #ffffff;
+  --max-page: #ffffff;
+  --max-page-edge: #f0f0f0;
+  --max-form-border: #808080;
+  --max-track: #dfdfdf;
+  --max-error: #a80000;
+  --max-on-accent: #ffffff;
+  --max-titlebar: #000080;
+  --max-titlebar-text: #ffffff;
+  --max-wordmark-glow: none;
+  --max-focus: var(--max-green);
+  --max-radius: 0px;
+  --max-bevel-raised:
+    inset 1px 1px 0 #ffffff, inset -1px -1px 0 #000000, inset 2px 2px 0 #dfdfdf,
+    inset -2px -2px 0 #808080;
+  --max-bevel-inset:
+    inset 1px 1px 0 #808080, inset -1px -1px 0 #ffffff, inset 2px 2px 0 #000000,
+    inset -2px -2px 0 #dfdfdf;
+  --destructive-foreground: #ffffff;
+}
+:root:not(.dark)
+  .max-scope
+  :is(.rounded, .rounded-sm, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-radius: 0;
+}
+:root:not(.dark) .max-scope ::selection {
+  background: #000080;
+  color: #ffffff;
 }
 
 /* Shared picker hints use opacity in T3; MAX's muted token already encodes

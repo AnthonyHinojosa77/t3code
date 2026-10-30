@@ -22,9 +22,36 @@ const { fileURLToPath } = NodeURL;
 import * as NodeSqlite from "node:sqlite";
 const { DatabaseSync } = NodeSqlite;
 import { EngineClient } from "../../packages/max-gateway/src/council/engineClient.ts";
+import { CouncilStore } from "../../packages/max-gateway/src/council/councilStore.ts";
+import { RoleTemplates } from "../../packages/max-gateway/src/council/roleTemplates.ts";
 import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts";
+import { buildSeededRound, SEEDED_PAGE_TITLES } from "./seedRound.mjs";
+import {
+  isPhoneLayout,
+  MAX_PHONE_LAYOUT_QUERY,
+} from "../../apps/web/src/components/max/maxLayout.ts";
 
 const researchRound = process.argv.includes("--research-round");
+const lightScheme = process.argv.includes("--light");
+const noRound = process.argv.includes("--no-round");
+const desktop = process.argv.includes("--desktop");
+const evidenceArg = process.argv.indexOf("--evidence");
+const evidenceDir = evidenceArg >= 0 ? path.resolve(process.argv[evidenceArg + 1]) : null;
+// Device profile: phones get touch and a 3x scale; the computer profile is a 1440x900 window with
+// a mouse, a trackpad wheel and a keyboard. Both use the same build and the same seeded round.
+const viewport = desktop
+  ? { width: 1440, height: 900 }
+  : noRound
+    ? { width: 360, height: 780 }
+    : { width: 390, height: 844 };
+const VIEWPORTS = [
+  { width: 360, height: 780 },
+  { width: 390, height: 844 },
+  { width: 430, height: 932 },
+  { width: 844, height: 390 },
+  { width: 768, height: 1024 },
+  { width: 1440, height: 900 },
+];
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium, expect } = require("playwright/test");
@@ -33,11 +60,14 @@ const { chromium, expect } = require("playwright/test");
 if (
   !process.argv.includes("--single-scheme") &&
   !process.argv.includes("--light") &&
-  !process.argv.includes("--no-round")
+  !process.argv.includes("--no-round") &&
+  !desktop
 ) {
   for (const flags of [
     ["--single-scheme"],
     ["--single-scheme", "--light", "--no-round", "--skip-build"],
+    ["--single-scheme", "--desktop", "--no-round", "--skip-build"],
+    ["--single-scheme", "--desktop", "--light", "--no-round", "--skip-build"],
   ]) {
     const child = spawn(
       process.execPath,
@@ -56,11 +86,16 @@ const artifacts = path.join(
   new Date().toISOString().replaceAll(":", "-"),
 );
 await mkdir(artifacts, { recursive: true });
+const runLabel = `${lightScheme ? "light" : "dark"}-${desktop ? "desktop" : "phone"}-${viewport.width}x${viewport.height}`;
 const summary = {
-  colorScheme: process.argv.includes("--light") ? "light" : "dark",
+  colorScheme: lightScheme ? "light" : "dark",
+  device: desktop ? "computer" : "phone",
   status: "running",
-  viewport: process.argv.includes("--no-round") ? "360x780@3" : "390x844@3",
+  viewport: `${viewport.width}x${viewport.height}@${desktop ? 2 : 3}`,
   steps: [],
+  pageTurns: [],
+  attachmentUploads: [],
+  seededRound: null,
   gates: [],
   longTasks: [],
   usage: [],
@@ -71,6 +106,9 @@ const summary = {
   cleanup: {},
   cancelledAtLogout: [],
   cancelledAtReload: [],
+  boots: [],
+  focusRings: [],
+  layoutChecks: [],
 };
 const errors = [],
   network = [],
@@ -79,7 +117,6 @@ const errors = [],
 let loggingOut = false;
 let reloading = false;
 const activeRequests = new Set();
-const requestsBeforeReload = new WeakSet();
 const startedDuringLogout = new WeakSet();
 const providerEvidence = new Map();
 function collectProviders(value) {
@@ -252,10 +289,33 @@ async function cleanup() {
   await rm(dir, { recursive: true, force: true });
   summary.cleanup.tempRemoved = true;
 }
+async function copyEvidence() {
+  if (!evidenceDir) return;
+  const target = path.join(evidenceDir, runLabel);
+  await rm(target, { recursive: true, force: true });
+  await mkdir(target, { recursive: true });
+  await NodeFSP.cp(artifacts, target, { recursive: true });
+  const videoDir = path.join(artifacts, "video");
+  try {
+    for (const file of await NodeFSP.readdir(videoDir))
+      await NodeFSP.rename(
+        path.join(videoDir, file),
+        path.join(target, `page-turns-${runLabel}.webm`),
+      );
+  } catch {
+    /* No video was recorded in this run. */
+  }
+  summary.evidence = target;
+}
 for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => {
     void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
   });
+// A rejected promise nobody awaited must still stop the processes this run owns.
+process.on("unhandledRejection", (reason) => {
+  errors.push("Unhandled rejection: " + redact(reason instanceof Error ? reason.stack : reason));
+  void cleanup().finally(() => process.exit(1));
+});
 function safeUrl(url) {
   const u = new URL(url);
   return u.origin + u.pathname;
@@ -271,29 +331,36 @@ async function gates(name) {
         .map((a) => a.finished.catch(() => {})),
     );
   });
-  const result = await page.evaluate(() => {
-    const visible = (el) =>
-      el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
-    const titles = [...document.querySelectorAll(".max-wordmark,h1")].filter(
-      (el) => visible(el) && el.textContent.trim() === "MAX",
-    );
-    const primary = [
-      ...document.querySelectorAll(
-        'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], .max-council-button, .max-council-models button, .max-scope select',
-      ),
-    ].filter(visible);
-    return {
-      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-      truncatedTitles: titles.filter((el) => el.scrollWidth > el.clientWidth).length,
-      smallTargets: primary
-        .map((el) => ({
-          label: el.getAttribute("aria-label") || el.textContent.trim(),
-          width: el.getBoundingClientRect().width,
-          height: el.getBoundingClientRect().height,
-        }))
-        .filter((x) => x.width < 40 || x.height < 40),
-    };
-  });
+  const result = await page.evaluate(
+    (minimumTarget) => {
+      const visible = (el) =>
+        el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+      const titles = [...document.querySelectorAll(".max-wordmark,h1")].filter(
+        (el) => visible(el) && el.textContent.trim() === "MAX",
+      );
+      const primary = [
+        ...document.querySelectorAll(
+          'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose models"], button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], button[aria-label="Send to council"], .max-button, .max-council-button, .max-icon-button:not(.max-icon-button-small), .max-model-button, .max-council-models button, .max-scope select, .max-panel-new, .max-panel-item, .max-panel-footer-button',
+        ),
+      ].filter(visible);
+      return {
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        truncatedTitles: titles.filter((el) => el.scrollWidth > el.clientWidth).length,
+        // A finger cannot hover, so a tooltip on a phone is always a stuck one.
+        tooltips: [...document.querySelectorAll('[role="tooltip"]')].filter(visible).length,
+        smallTargets: primary
+          .map((el) => ({
+            label: el.getAttribute("aria-label") || el.textContent.trim(),
+            width: el.getBoundingClientRect().width,
+            height: el.getBoundingClientRect().height,
+          }))
+          // Touch needs 40 CSS px; the computer profile measures T3's own 28 px header controls
+          // against a pointer-precision floor instead.
+          .filter((x) => x.width < minimumTarget || x.height < minimumTarget),
+      };
+    },
+    desktop ? 28 : 40,
+  );
   const visual = await page.evaluate(visualGates);
   summary.gates.push({ step: name, ...result, ...visual });
 }
@@ -321,7 +388,7 @@ async function step(name, fn) {
 }
 async function reloadPage() {
   await page.waitForLoadState("networkidle");
-  for (const request of activeRequests) requestsBeforeReload.add(request);
+  const expected = await expectedBootScheme();
   reloading = true;
   try {
     await page.reload();
@@ -329,6 +396,157 @@ async function reloadPage() {
   } finally {
     reloading = false;
   }
+  await checkBoot(expected, "reload");
+}
+/** The appearance the next load must boot with: the stored choice, else MAX's dark default. */
+async function expectedBootScheme() {
+  const stored = await page.evaluate(() => localStorage.getItem("t3code:theme-appearance-mode"));
+  return stored === "light" || stored === "dark"
+    ? stored
+    : stored === "system"
+      ? summary.colorScheme
+      : "dark";
+}
+const CANVAS = { dark: "rgb(10, 10, 10)", light: "rgb(192, 192, 192)" };
+/**
+ * From the first paint until the app is on screen the page shows one MAX loading screen on the
+ * theme's own canvas: no white, no unstyled text, no second look. The init script below records
+ * every distinct screen the root showed.
+ */
+async function checkBoot(expected, when) {
+  const boot = await page.evaluate(() => window.__maxBoot);
+  const screens = boot.screens.filter((screen) => screen.painted !== false);
+  const firstApp = screens.findIndex((screen) => !screen.boot);
+  const loading = firstApp < 0 ? screens : screens.slice(0, firstApp);
+  const row = { when, expected, htmlBackground: boot.htmlBackground, screens };
+  summary.boots.push(row);
+  assert(loading.length >= 1 && screens[0].boot, `${when}: first paint was not the loading screen`);
+  assert.equal(boot.htmlBackground, CANVAS[expected], `${when}: document background during boot`);
+  for (const screen of loading) {
+    assert.equal(screen.background, CANVAS[expected], `${when}: loading screen background`);
+    assert.equal(screen.text, loading[0].text, `${when}: loading screens differ`);
+    assert.equal(screen.text, "MAXConnecting…", `${when}: loading screen text`);
+  }
+  for (const screen of screens)
+    assert(
+      !/Connecting to MAX|INITIALIZING/.test(screen.text),
+      `${when}: unstyled loading text appeared`,
+    );
+  // After the app appears, a later loading screen (the app bundle's Suspense) must look the same.
+  for (const screen of screens.slice(firstApp < 0 ? screens.length : firstApp))
+    if (screen.boot) {
+      assert.equal(screen.background, CANVAS[expected], `${when}: later loading screen background`);
+      assert.equal(screen.text, "MAXConnecting…", `${when}: later loading screen text`);
+    }
+}
+/** Whether the window is laid out as a phone right now: the app's own media query. */
+async function phoneLayout() {
+  return page.evaluate((query) => matchMedia(query).matches, MAX_PHONE_LAYOUT_QUERY);
+}
+/**
+ * Focus ring: visible only after real keyboard use. `expectRing` names where the ring must be
+ * ("page" for the page being read, "none" after a tap).
+ */
+async function focusGate(name, expectRing) {
+  const seen = await page.evaluate(() => {
+    const ringed = (el) => {
+      const style = getComputedStyle(el);
+      return (
+        (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) ||
+        // T3's own buttons draw their ring as a box shadow; MAX turns it off.
+        (el.matches('[data-sidebar="trigger"]') && style.boxShadow !== "none")
+      );
+    };
+    const focused = [...document.querySelectorAll(":focus-visible")].filter(
+      (el) => el !== document.documentElement && el !== document.body,
+    );
+    const front = document.querySelector('[data-max-page][data-position="current"]');
+    return {
+      modality: document.documentElement.dataset.maxInput ?? null,
+      active: document.activeElement?.tagName + "." + (document.activeElement?.className || ""),
+      rings: focused.filter(ringed).map((el) => el.tagName + "." + el.className),
+      pageRing: front ? ringed(front) : false,
+    };
+  });
+  summary.focusRings.push({ name, expectRing, ...seen });
+  if (expectRing === "none") {
+    assert.equal(seen.modality, "pointer", `${name}: last input should be a pointer`);
+    assert.deepEqual(seen.rings, [], `${name}: a focus ring showed after touch`);
+    assert(!seen.pageRing, `${name}: the page showed a focus ring after touch`);
+  } else {
+    assert.equal(seen.modality, "keyboard", `${name}: last input should be the keyboard`);
+    assert(seen.pageRing, `${name}: the page being read must show the keyboard focus ring`);
+  }
+}
+/**
+ * The window's rows must stack without overlap or clipping, and the answer must keep most of the
+ * height: at least 120 px of page body even on a phone held sideways.
+ */
+async function layoutGate(label, { docked }) {
+  const measured = await page.evaluate(() => {
+    const rect = (selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height };
+    };
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      header: rect(".max-header"),
+      modeSwitch: rect(".max-segmented"),
+      question: rect(".max-user-turn"),
+      pageBody: rect('[data-max-page][data-position="current"] .max-page-body'),
+      pageActions: rect('[data-max-page][data-position="current"] .max-page-actions'),
+      nav: rect(".max-pages-nav"),
+      position: rect("[data-page-position]"),
+      composer: rect(".max-composer"),
+      send: rect('[aria-label="Send to council"]'),
+      coarse: matchMedia("(pointer: coarse)").matches,
+    };
+  });
+  const row = { label, docked, ...measured };
+  summary.layoutChecks.push(row);
+  const { viewport } = measured;
+  const inside = (name) => {
+    const r = measured[name];
+    assert(r, `${label}: missing ${name}`);
+    assert(
+      r.top >= -0.5 &&
+        r.left >= -0.5 &&
+        r.bottom <= viewport.height + 0.5 &&
+        r.right <= viewport.width + 0.5,
+      `${label}: ${name} is clipped by the viewport (${JSON.stringify(r)})`,
+    );
+  };
+  for (const name of [
+    "header",
+    "modeSwitch",
+    "question",
+    "pageBody",
+    "pageActions",
+    "nav",
+    "position",
+    "composer",
+    "send",
+  ])
+    inside(name);
+  assert(measured.modeSwitch.top >= 1, `${label}: the mode switch touches the top edge`);
+  const order = ["header", "question", "pageBody", "pageActions", "nav", "composer"];
+  for (let i = 1; i < order.length; i++)
+    assert(
+      measured[order[i]].top >= measured[order[i - 1]].bottom - 0.5,
+      `${label}: ${order[i]} overlaps ${order[i - 1]}`,
+    );
+  assert(
+    measured.pageBody.height >= 120,
+    `${label}: the answer body is only ${Math.round(measured.pageBody.height)} px tall`,
+  );
+  const panelVisible = await panel().isVisible();
+  assert.equal(
+    panelVisible,
+    docked,
+    `${label}: panel ${docked ? "must be" : "must not be"} docked`,
+  );
 }
 
 async function home() {
@@ -336,23 +554,185 @@ async function home() {
   await expect(page.getByRole("textbox", { name: "Question for the council" })).toBeVisible({
     timeout: 60000,
   });
-  await expect(
-    page.getByRole("button", { name: "Choose contender models", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Council", exact: true })).toBeVisible();
-  await expect(page.getByText("Synthesizer", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose models", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send to council", exact: true })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Ask the council.", exact: true })).toBeVisible();
   await expect(
     page.getByText(/Unable to connect|Something went wrong|Connection failed/i),
   ).toHaveCount(0);
+}
+const modelWindow = () => page.getByRole("dialog", { name: "Models", exact: true });
+async function openModelWindow() {
+  if (await modelWindow().isVisible()) return;
+  await page.getByRole("button", { name: "Choose models", exact: true }).click();
+  await expect(modelWindow()).toBeVisible();
+}
+async function closeModelWindow() {
+  await modelWindow().getByRole("button", { name: "Close", exact: true }).click();
+  await expect(modelWindow()).toHaveCount(0);
+}
+const panel = () => page.getByRole("navigation", { name: "Past conversations" });
+/** Phones keep the side panel in a drawer; computers dock it. */
+async function openPanel() {
+  if (!(await panel().isVisible())) {
+    await page.getByRole("button", { name: "Toggle main sidebar" }).first().click();
+    await expect(panel()).toBeVisible();
+  }
+}
+/**
+ * Closes an open drawer the way a person does: a finger on the drawer's own panel button (touch
+ * profile; on a phone the drawer covers the whole width, so there is no scrim to tap) or Escape
+ * (computer profile). Closing must only close the drawer: no page may turn underneath.
+ */
+async function closePanelIfDrawer(via = desktop ? "escape" : "tap") {
+  if (!(await phoneLayout())) return;
+  const positionBefore = await position()
+    .textContent()
+    .catch(() => null);
+  if (via === "tap") await panel().getByRole("button", { name: "Toggle main sidebar" }).tap();
+  else await page.keyboard.press("Escape");
+  await expect(panel()).toBeHidden();
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})));
+  });
+  const positionAfter = await position()
+    .textContent()
+    .catch(() => null);
+  (summary.drawerCloses ??= []).push({ via, positionBefore, positionAfter });
+  assert.equal(positionAfter, positionBefore, `Closing the drawer (${via}) must not turn a page`);
+}
+/** Choosing a conversation or New chat closes the drawer by itself; a docked panel stays. */
+async function expectDrawerClosedItself() {
+  if (await phoneLayout()) await expect(panel()).toBeHidden();
+}
+const pages = () => page.getByRole("region", { name: "Council answers", exact: true });
+const position = () => page.locator("[data-page-position]");
+const frontPage = () => page.locator('[data-max-page][data-position="current"]');
+async function pageOrder() {
+  return page.locator("[data-max-page]").evaluateAll((els) => els.map((el) => el.dataset.pageId));
+}
+async function frontTitle() {
+  return (await frontPage().locator(".max-page-title").textContent()).trim();
+}
+let cdp;
+/** A real finger: CDP touch points through Chromium's gesture recognizer, not synthetic pointer events. */
+async function swipe(direction) {
+  // Diagnostic: which pointer events the stack actually received from the touch sequence.
+  await page.evaluate(() => {
+    const root = document.querySelector(".max-pages");
+    window.__maxPointer = { down: 0, move: 0, up: 0, cancel: 0, touchstart: 0, touchmove: 0 };
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
+      root.addEventListener(type, () => window.__maxPointer[type.slice(7)]++, { once: false });
+    for (const type of ["touchstart", "touchmove"])
+      root.addEventListener(type, () => window.__maxPointer[type]++, { passive: true });
+  });
+  const box = await pages().boundingBox();
+  const y = box.y + box.height * 0.45;
+  const from = box.x + box.width * (direction === "left" ? 0.85 : 0.15);
+  const to = box.x + box.width * (direction === "left" ? 0.15 : 0.85);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+  const steps = 14;
+  for (let i = 1; i <= steps; i++) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: from + ((to - from) * i) / steps, y }],
+    });
+    await page.waitForTimeout(12);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  summary.pointerTrace = await page.evaluate(() => window.__maxPointer);
+}
+async function dragWithMouse(direction) {
+  const box = await pages().boundingBox();
+  const y = box.y + box.height * 0.45;
+  const from = box.x + box.width * (direction === "left" ? 0.85 : 0.15);
+  const to = box.x + box.width * (direction === "left" ? 0.15 : 0.85);
+  await page.mouse.move(from, y);
+  await page.mouse.down();
+  await page.mouse.move(from + (to - from) * 0.5, y, { steps: 8 });
+  await page.mouse.move(to, y, { steps: 8 });
+  await page.mouse.up();
+}
+/** Frame times while one page turns. Long frames here are the jank the owner called "jagged". */
+async function measureTurn(name, turn) {
+  await page.evaluate(() => {
+    window.__maxFrames = [];
+    window.__maxMotion = [];
+    let last = performance.now();
+    const start = last;
+    const front = document.querySelector('[data-max-page][data-position="current"]');
+    const tick = (t) => {
+      window.__maxFrames.push(t - last);
+      // Where the page being read actually is this frame, so a stalled turn cannot hide
+      // behind a healthy frame rate.
+      if (front)
+        window.__maxMotion.push([
+          Math.round(t - start),
+          Math.round(new DOMMatrix(getComputedStyle(front).transform).m41),
+        ]);
+      last = t;
+      if (t - start < 900) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await turn();
+  await page.waitForTimeout(950);
+  const motion = await page.evaluate(() => window.__maxMotion);
+  const frames = (await page.evaluate(() => window.__maxFrames)).slice(1);
+  const sorted = [...frames].sort((a, b) => a - b);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
+  const longest = sorted.at(-1) ?? 0;
+  const over34 = frames.filter((f) => f > 34).length;
+  // The page's travel: when it first moved, when it last moved, and the longest pause between
+  // two frames in which it changed position while still more than 4 px from where it ended (the
+  // ease-out tail moves under a pixel a frame and is not a stall). A settle must not freeze.
+  const moving = motion.filter(([, x], i) => i > 0 && x !== motion[i - 1][1]);
+  const firstMoveMs = moving[0]?.[0] ?? null;
+  const lastMoveMs = moving.at(-1)?.[0] ?? null;
+  const finalX = motion.at(-1)?.[1] ?? 0;
+  const enRoute = moving.filter(([, x]) => Math.abs(x - finalX) > 4);
+  let longestPauseMs = 0;
+  for (let i = 1; i < enRoute.length; i++)
+    longestPauseMs = Math.max(longestPauseMs, enRoute[i][0] - enRoute[i - 1][0]);
+  const row = {
+    name,
+    frames: frames.length,
+    longestMs: +longest.toFixed(1),
+    p95Ms: +p95.toFixed(1),
+    over34,
+    firstMoveMs,
+    lastMoveMs,
+    longestPauseMs,
+    travelMs: firstMoveMs === null ? null : lastMoveMs - firstMoveMs,
+    pass: longest <= 80 && over34 <= 2 && longestPauseMs <= 150,
+  };
+  summary.pageTurns.push(row);
+  return row;
+}
+async function expectPosition(text) {
+  await expect(position()).toHaveText(text);
+}
+async function restoreScheme() {
+  // Each run keeps its own appearance from here on; a toggle test must put it back.
+  await page.evaluate(
+    (mode) => localStorage.setItem("t3code:theme-appearance-mode", mode),
+    lightScheme ? "light" : "dark",
+  );
 }
 try {
   assert(
     process.env.PLAYWRIGHT_BROWSERS_PATH,
     "Set PLAYWRIGHT_BROWSERS_PATH to existing installed browsers (no download)",
   );
+  {
+    // The app decides phone/computer in JavaScript and in CSS; both must be the same query.
+    const css = await readFile(path.join(root, "apps/web/src/components/max/council.css"), "utf8");
+    assert(
+      css.includes(`@media ${MAX_PHONE_LAYOUT_QUERY} {`),
+      "council.css no longer repeats MAX_PHONE_LAYOUT_QUERY",
+    );
+    assert(!/@media \(max-width: 767px\) \{/.test(css), "council.css has a width-only phone query");
+  }
   if (!process.argv.includes("--skip-build"))
     await run("corepack", ["pnpm", "--filter", "@t3tools/web", "build"], {
       T3CODE_SINGLE_ORIGIN_DEV: "1",
@@ -421,6 +801,16 @@ try {
     }),
     { mode: 0o600 },
   );
+  {
+    // Saved before the companion opens the same database; closed so the WAL hands over cleanly.
+    const seededId = `seed-${randomBytes(4).toString("hex")}`;
+    const store = new CouncilStore(common.MAX_COUNCIL_DB);
+    const templates = new RoleTemplates(common.MAX_TEMPLATES_DIR);
+    const seeded = buildSeededRound(seededId, Date.now() - 10 * 60000);
+    store.save(seeded, templates.get("meta-debate"));
+    store.close();
+    summary.seededRound = { id: seededId, prompt: seeded.prompt };
+  }
   const companion = start(process.execPath, ["packages/max-gateway/src/miniCompanion.ts"], {
     ...common,
     MAX_GATEWAY_URL: base,
@@ -430,18 +820,59 @@ try {
   await ready(companion, "max companion tunnel connected");
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    viewport: process.argv.includes("--no-round")
-      ? { width: 360, height: 780 }
-      : { width: 390, height: 844 },
+    viewport,
     colorScheme: summary.colorScheme,
-    deviceScaleFactor: 3,
-    isMobile: true,
-    hasTouch: true,
+    deviceScaleFactor: desktop ? 2 : 3,
+    isMobile: !desktop,
+    hasTouch: !desktop,
+    ...(evidenceDir ? { recordVideo: { dir: path.join(artifacts, "video"), size: viewport } } : {}),
   });
   await context.exposeBinding("recordLongTask", (_source, duration) =>
     summary.longTasks.push(duration),
   );
   await context.addInitScript(() => {
+    // Every distinct first child of #root, from the parser's boot shell to the app.
+    const record = { htmlBackground: null, screens: [] };
+    window.__maxBoot = record;
+    let lastFirst = null;
+    const snapshot = () => {
+      if (record.htmlBackground === null && document.body)
+        record.htmlBackground = getComputedStyle(document.documentElement).backgroundColor;
+      const first = document.getElementById("root")?.firstElementChild;
+      if (!first || first === lastFirst) return;
+      lastFirst = first;
+      const bootEl = first.matches("[data-max-boot]")
+        ? first
+        : first.querySelector("[data-max-boot]");
+      const screen = {
+        boot: bootEl !== null,
+        text: (first.textContent || "").trim().replace(/\s+/g, "").slice(0, 60),
+        background: null,
+      };
+      record.screens.push(screen);
+      // The head stylesheet blocks painting, not parsing: read the colour at the first frame
+      // after the bundle's stylesheet is in place, which is the colour actually painted.
+      const measure = () => {
+        // Replaced before a frame: never painted, so it is not a screen anyone saw.
+        if (!first.isConnected) {
+          screen.painted = false;
+          return;
+        }
+        const styled = [...document.styleSheets].some((sheet) =>
+          /\/assets\/.*\.css/.test(sheet.href || ""),
+        );
+        if (!styled) {
+          requestAnimationFrame(measure);
+          return;
+        }
+        screen.painted = true;
+        screen.background = getComputedStyle(bootEl ?? document.body).backgroundColor;
+      };
+      requestAnimationFrame(measure);
+    };
+    // Init scripts run before <html> exists, so observe the document node itself.
+    new MutationObserver(snapshot).observe(document, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", snapshot);
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries())
         if (entry.duration > 200) window.recordLongTask(entry.duration);
@@ -449,6 +880,12 @@ try {
   });
   page = await context.newPage();
   page.setDefaultTimeout(15000);
+  cdp = await context.newCDPSession(page);
+  page.on("request", (req) => {
+    const u = new URL(req.url());
+    if (u.origin === base && req.method() === "POST" && /attachment|upload/i.test(u.pathname))
+      summary.attachmentUploads.push({ path: u.pathname, step: summary.steps.at(-1)?.name });
+  });
   page.on("websocket", (socket) =>
     socket.on("framereceived", ({ payload }) => {
       try {
@@ -502,11 +939,8 @@ try {
   });
   page.on("requestfailed", (req) => {
     activeRequests.delete(req);
-    if (
-      reloading &&
-      requestsBeforeReload.has(req) &&
-      req.failure()?.errorText === "net::ERR_ABORTED"
-    ) {
+    // A request active before, or started during, a deliberate reload is cancelled by that reload.
+    if (reloading && req.failure()?.errorText === "net::ERR_ABORTED") {
       summary.cancelledAtReload.push(new URL(req.url()).pathname);
       return;
     }
@@ -546,6 +980,10 @@ try {
   await step("login-page", async () => {
     await page.goto(base);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    // First visit: nothing stored, so MAX boots dark whatever the OS prefers.
+    await checkBoot("dark", "first-visit");
+    summary.coarsePointer = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+    assert.equal(summary.coarsePointer, !desktop, "Touch profile must report a coarse pointer");
   });
   assert.deepEqual(anonymousTraffic, [], "Authenticated traffic before MAX login");
   page.off("request", recordAnonymous);
@@ -571,9 +1009,45 @@ try {
     await page.getByLabel("PASSWORD", { exact: true }).fill("local-e2e-password");
     await page.getByRole("button", { name: "SIGN IN", exact: true }).click();
     await home();
+    // The sign-in form hands over to the app through the same loading screen.
+    await checkBoot("dark", "after-login");
+  });
+  await step("theme-toggle-persists", async () => {
+    // Old MAX's light mode: a real light palette, remembered across reloads. A light run stays
+    // light for every later gate; a dark run toggles there and back.
+    const toggle = (name) => page.getByRole("button", { name, exact: true }).first();
+    await toggle("Switch to light mode").click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(toggle("Switch to dark mode")).toBeVisible();
+    await reloadPage();
+    await home();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    assert.equal(
+      await page.locator(".max-window").evaluate((el) => getComputedStyle(el).backgroundColor),
+      "rgb(192, 192, 192)",
+      "Light mode must render old MAX's chrome-gray surface",
+    );
+    await gates("light-home");
+    await page.screenshot({ path: path.join(artifacts, "theme-light-home.png"), fullPage: true });
+    if (!lightScheme) {
+      await toggle("Switch to dark mode").click();
+      await expect(page.locator("html")).toHaveClass(/dark/);
+      await reloadPage();
+      await home();
+      await expect(page.locator("html")).toHaveClass(/dark/);
+    }
+  });
+  await step("model-window", async () => {
+    await openModelWindow();
+    await expect(modelWindow().getByRole("heading", { name: "Contenders" })).toBeVisible();
+    await expect(modelWindow().getByRole("heading", { name: "Synthesizer" })).toBeVisible();
+    await expect(modelWindow().getByLabel("Project folder")).toBeVisible();
+    await expect(modelWindow().getByLabel("Template")).toBeVisible();
   });
   await step("contender-picker", async () => {
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
+    await modelWindow()
+      .getByRole("button", { name: "Choose contender models", exact: true })
+      .click();
     await expect(page.getByPlaceholder("Search models...")).toBeVisible();
   });
   await step("two-contenders", async () => {
@@ -631,7 +1105,9 @@ try {
     ).toHaveCount(2);
   });
   await step("synthesizer", async () => {
-    await page.getByRole("button", { name: "Choose synthesizer model", exact: true }).click();
+    await modelWindow()
+      .getByRole("button", { name: "Choose synthesizer model", exact: true })
+      .click();
     const selected = researchRound
       ? [...providerEvidence.values()].flatMap(({ provider }) =>
           provider.status === "ready"
@@ -651,14 +1127,17 @@ try {
       .trim();
   });
   await step("low-effort", async () => {
+    await openModelWindow();
     const scopes = [
       ...(await page
         .getByRole("list", { name: "Contenders", exact: true })
         .getByRole("listitem")
         .all()),
-      page.locator(".max-council-models > div").filter({
-        has: page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
-      }),
+      modelWindow()
+        .locator("section")
+        .filter({
+          has: page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
+        }),
     ];
     for (const scope of scopes) {
       const traits = scope
@@ -669,11 +1148,13 @@ try {
       const low = page.getByRole("menuitemradio").filter({ hasText: /^Low/ }).first();
       await expect(page.getByRole("menu")).toBeVisible();
       await low.click();
-      await page.keyboard.press("Escape");
+      // Choosing closes the menu; an extra Escape would close the model window around it.
+      if (await page.getByRole("menu").count()) await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toHaveCount(0);
     }
   });
   await step("traits-menu", async () => {
+    await openModelWindow();
     const traits = page
       .getByRole("list", { name: "Contenders", exact: true })
       .getByRole("button")
@@ -684,12 +1165,17 @@ try {
   });
   await page.keyboard.press("Escape");
   await step("manage-templates", async () => {
-    await page.getByRole("button", { name: "Manage templates", exact: true }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await openModelWindow();
+    await modelWindow().getByRole("button", { name: "Manage templates", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Manage templates" })).toBeVisible();
   });
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Manage templates" })).toHaveCount(0);
   await step("provider-usage", async () => {
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
+    await openModelWindow();
+    await modelWindow()
+      .getByRole("button", { name: "Choose contender models", exact: true })
+      .click();
     const providers = page.getByRole("toolbar", { name: "Providers" }).getByRole("button");
     assert((await providers.count()) > 0, "No providers in picker");
     for (let i = 0; i < (await providers.count()); i++) {
@@ -719,7 +1205,126 @@ try {
     }
     await page.keyboard.press("Escape");
   });
-  if (!process.argv.includes("--no-round")) {
+  await step("model-window-closes", async () => {
+    await closeModelWindow();
+    await expect(page.getByRole("button", { name: "Choose models", exact: true })).toHaveText(
+      /2 models · judge set/,
+    );
+  });
+  await step("seeded-round-from-panel", async () => {
+    await openPanel();
+    await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
+    await expect(page).toHaveURL(new RegExp("[?&]round=" + summary.seededRound.id));
+    await expectDrawerClosedItself();
+    await expect(pages()).toBeVisible();
+    await expectPosition("1 of 4");
+    assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[0], "First finisher must be in front");
+    await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
+    await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    await page.screenshot({ path: path.join(artifacts, "seeded-front-page.png"), fullPage: true });
+  });
+  await step(desktop ? "turn-by-mouse-drag" : "turn-by-touch", async () => {
+    const turn = desktop ? dragWithMouse : swipe;
+    const first = await measureTurn(desktop ? "mouse-drag-forward" : "touch-swipe-forward", () =>
+      turn("left"),
+    );
+    await expectPosition("2 of 4");
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[1]);
+    await measureTurn(desktop ? "mouse-drag-back" : "touch-swipe-back", () => turn("right"));
+    await expectPosition("1 of 4");
+    assert(first.frames > 20, "Frame sampler saw too few frames during the turn");
+    if (!desktop) {
+      // A tap on the page control, then on the page itself: no ring anywhere.
+      await page.getByRole("button", { name: "Next page" }).last().tap();
+      await expectPosition("2 of 4");
+      await focusGate("after-tap-next", "none");
+      await page.getByRole("button", { name: "Previous page" }).tap();
+      await expectPosition("1 of 4");
+      await focusGate("after-tap-previous", "none");
+      await page.screenshot({
+        path: path.join(artifacts, "focus-after-touch.png"),
+        fullPage: true,
+      });
+    } else await focusGate("after-mouse-drag", "none");
+  });
+  await step("turn-by-keyboard-to-synthesis", async () => {
+    await pages().focus();
+    await measureTurn("keyboard-forward", () => page.keyboard.press("ArrowRight"));
+    await expectPosition("2 of 4");
+    await focusGate("after-keyboard-turn", "page");
+    await page.screenshot({
+      path: path.join(artifacts, "focus-after-keyboard.png"),
+      fullPage: true,
+    });
+    await page.keyboard.press("ArrowRight");
+    await expectPosition("3 of 4");
+    assert.equal(
+      await frontTitle(),
+      SEEDED_PAGE_TITLES[2],
+      "Failed model page sits after the answers",
+    );
+    await expect(frontPage().getByText("Provider unavailable")).toBeVisible();
+    await expect(frontPage().locator(".max-council-status")).toHaveText("failed");
+    await gates("seeded-failed-page");
+    await page.keyboard.press("ArrowRight");
+    await expectPosition("4 of 4");
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[3], "Synthesis is always the last page");
+    await expect(frontPage().getByRole("heading", { name: "Verdict", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next page" }).last()).toBeDisabled();
+    await gates("seeded-synthesis-page");
+    await page.screenshot({
+      path: path.join(artifacts, "seeded-synthesis-page.png"),
+      fullPage: true,
+    });
+    await page.keyboard.press("Home");
+    await expectPosition("1 of 4");
+  });
+  await step("turn-by-buttons-and-edge", async () => {
+    await page.getByRole("button", { name: "Next page" }).last().click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+    await page.locator(".max-page-edge").click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+  });
+  await step("page-keeps-own-scroll", async () => {
+    const body = frontPage().locator(".max-page-body");
+    await body.evaluate((el) => {
+      el.scrollTop = 120;
+    });
+    const before = await body.evaluate((el) => el.scrollTop);
+    assert(before > 0, "Seeded answer must be long enough to scroll");
+    await page.getByRole("button", { name: "Next page" }).last().click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+    assert.equal(
+      await body.evaluate((el) => el.scrollTop),
+      before,
+      "Scroll position must survive a turn",
+    );
+  });
+  await step("seeded-order-after-reload", async () => {
+    await reloadPage();
+    await expect(pages()).toBeVisible();
+    await expectPosition("1 of 4");
+    assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[0]);
+    // The models chosen before the reload are still chosen.
+    await expect(page.getByRole("button", { name: "Choose models", exact: true })).toHaveText(
+      /2 models · judge set/,
+    );
+  });
+  await step("new-chat-from-panel", async () => {
+    await openPanel();
+    await panel().getByRole("button", { name: "New chat", exact: true }).click();
+    await expectDrawerClosedItself();
+    await home();
+  });
+  if (!noRound) {
     let completed;
     let lastRoundState;
     await step("real-round-send", async () => {
@@ -728,6 +1333,13 @@ try {
         .getByRole("list", { name: "Contenders", exact: true })
         .locator("li > span")
         .allTextContents();
+      // The chips in the model window are the expected page titles, including the provider label.
+      await openModelWindow();
+      summary.displayNames = await modelWindow()
+        .getByRole("list", { name: "Contenders", exact: true })
+        .locator("li > span")
+        .allTextContents();
+      await closeModelWindow();
       await page
         .getByRole("textbox", { name: "Question for the council" })
         .fill(
@@ -735,13 +1347,36 @@ try {
             ? "Use a web search to find today’s top headline on reuters.com and reply in one sentence naming the source and linking the article."
             : "Reply with exactly one word: ready",
         );
-      const created = page.waitForResponse(
-        (res) =>
-          new URL(res.url()).pathname === "/api/council/rounds" &&
-          res.request().method() === "POST",
-      );
+      // A 1x1 PNG through the plus button: it must reach every contender through the tunnel.
+      await page.locator('input[type="file"]').setInputFiles({
+        name: "dot.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      });
+      await expect(page.getByRole("list", { name: "Attached files" })).toContainText("dot.png");
+      // Files upload first, then the round is created; a failure shows in the composer's own line.
+      const created = page
+        .waitForResponse(
+          (res) =>
+            new URL(res.url()).pathname === "/api/council/rounds" &&
+            res.request().method() === "POST",
+          { timeout: 60000 },
+        )
+        .catch((error) => error);
       await page.getByRole("button", { name: "Send to council", exact: true }).click();
       const response = await created;
+      if (response instanceof Error) {
+        const composerSays = await page
+          .locator("#max-council-send-reason")
+          .textContent()
+          .catch(() => null);
+        throw new Error(
+          `Round was not created: ${response.message}; composer says: ${composerSays}`,
+        );
+      }
       const { round } = await response.json();
       roundId = round.id;
       summary.realRounds++;
@@ -750,10 +1385,46 @@ try {
         round.synthesis.threadId,
       ].filter(Boolean);
       assert.equal(response.status(), 201);
+      const sent = JSON.parse(response.request().postData());
+      assert.equal(sent.contenders.length, 2);
+      for (const c of sent.contenders)
+        assert.equal(c.attachments?.length, 1, "Each contender gets the file");
+      assert.notEqual(
+        sent.contenders[0].attachments[0].id,
+        sent.contenders[1].attachments[0].id,
+        "Each contender needs its own pending upload",
+      );
+      assert.equal(summary.attachmentUploads.length, 2, "Two upload POSTs must cross the gateway");
+      summary.sentAttachments = sent.contenders.map((c) => c.attachments[0]);
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator("article"),
-      ).toHaveCount(2);
+      await expect(page.getByRole("list", { name: "Files sent" })).toContainText("dot.png");
+      // Before anyone finishes: the calm thinking state with live progress. A fast model can beat
+      // this check, in which case the first page is already in front.
+      const thinking = page.locator("[data-answered-count]");
+      if (await thinking.isVisible()) {
+        await expect(thinking).toHaveText(/[0-2] of 2 answered/);
+        await gates("thinking-state");
+        await page.screenshot({ path: path.join(artifacts, "thinking-state.png"), fullPage: true });
+      } else summary.thinkingStateSeen = false;
+    });
+    await step("real-round-first-finisher", async () => {
+      await expect(pages()).toBeVisible({ timeout: 240000 });
+      const order = await pageOrder();
+      const snapshot = await page.evaluate(
+        async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
+        roundId,
+      );
+      const finished = snapshot.contenders
+        .filter((c) => c.finishedAt)
+        .sort((a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt));
+      assert(finished.length >= 1, "A page appeared before any contender finished");
+      assert.equal(order[0], finished[0].key, "The first model to finish is the front page");
+      summary.firstFinisher = { key: finished[0].key, model: finished[0].model };
+      await gates("first-finisher-front");
+      await page.screenshot({
+        path: path.join(artifacts, "first-finisher-front.png"),
+        fullPage: true,
+      });
     });
     await step("real-round-complete", async () => {
       await expect(async () => {
@@ -802,6 +1473,17 @@ try {
               runs: projection.runs,
               runtimeRequests: projection.runtimeRequests,
               turnItems: projection.turnItems,
+              // Role and attachment metadata only: enough to prove the file reached the thread.
+              messages: (projection.messages ?? []).map((m) => ({
+                role: m.role,
+                attachments: (m.attachments ?? []).map((a) => ({
+                  type: a.type,
+                  id: a.id,
+                  name: a.name,
+                  mimeType: a.mimeType,
+                  sizeBytes: a.sizeBytes,
+                })),
+              })),
             };
           }),
       );
@@ -814,17 +1496,45 @@ try {
         completed.synthesis.threadId,
       ].filter(Boolean);
       assert.equal(completed.contenders.length, 2);
-      const cards = page.getByRole("region", { name: "Council responses" }).locator("article");
+      for (const c of completed.contenders) {
+        const projection = summary.projections.find((p) => p.threadId === c.threadId);
+        const userMessage = projection.messages?.find((m) => m.role === "user");
+        assert.equal(
+          userMessage?.attachments?.length,
+          1,
+          "The engine thread must hold the attachment that crossed the tunnel",
+        );
+        assert.equal(userMessage.attachments[0].name, "dot.png");
+      }
+      summary.attachmentsOnThreads = completed.contenders.map((c) => ({
+        threadId: c.threadId,
+        attachment: summary.projections
+          .find((p) => p.threadId === c.threadId)
+          ?.messages?.find((m) => m.role === "user")?.attachments?.[0],
+      }));
+      // Pages: finish order, then the synthesis. Titles are the chips from the model window.
+      const byFinish = [...completed.contenders].sort(
+        (a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt),
+      );
+      assert.deepEqual(await pageOrder(), [...byFinish.map((c) => c.key), "synthesis"]);
+      assert.equal(
+        await pageOrder().then((o) => o[0]),
+        summary.firstFinisher.key,
+        "Order stayed stable",
+      );
+      await pages().focus();
+      await page.keyboard.press("Home");
+      await expectPosition("1 of 3");
       for (let i = 0; i < 2; i++) {
-        assert.equal(completed.contenders[i].status, "complete");
-        assert(completed.contenders[i].text.trim());
-        assert(!/Mode:/i.test(completed.contenders[i].text), "Contender leaked mode boilerplate");
-        assert(["auto", "approval-required"].includes(completed.contenders[i].runtimeMode));
+        const contender = byFinish[i];
+        const index = completed.contenders.indexOf(contender);
+        assert.equal(contender.status, "complete");
+        assert(contender.text.trim());
+        assert(!/Mode:/i.test(contender.text), "Contender leaked mode boilerplate");
+        assert(["auto", "approval-required"].includes(contender.runtimeMode));
         if (researchRound) {
-          assert.equal(completed.contenders[i].runtimeMode, "auto");
-          const projection = summary.projections.find(
-            (p) => p.threadId === completed.contenders[i].threadId,
-          );
+          assert.equal(contender.runtimeMode, "auto");
+          const projection = summary.projections.find((p) => p.threadId === contender.threadId);
           assert.equal(projection.runtimeMode, "auto");
           assert.equal(
             projection.runtimeRequests.length,
@@ -832,14 +1542,18 @@ try {
             "Research requested approval or input",
           );
         }
-        await expect(cards.nth(i)).not.toContainText(/Mode:/i);
+        await expectPosition(`${i + 1} of 3`);
+        await expect(frontPage()).not.toContainText(/Mode:/i);
         await expect(
-          cards.nth(i).getByRole("heading", { name: summary.displayNames[i], exact: true }),
+          frontPage().getByRole("heading", { name: summary.displayNames[index], exact: true }),
         ).toBeVisible();
-        await expect(cards.nth(i).locator(".max-council-status")).toHaveText("complete");
+        await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
+        await gates(`completed-answer-page-${i + 1}`);
+        if (i === 0)
+          await measureTurn("keyboard-forward-real", () => page.keyboard.press("ArrowRight"));
       }
-      await cards.first().scrollIntoViewIfNeeded();
-      await gates("completed-answer-text");
+      await page.keyboard.press("ArrowRight");
+      await expectPosition("3 of 3");
       summary.runtimeModes = completed.contenders.map((c) => ({
         threadId: c.threadId,
         runtimeMode: c.runtimeMode,
@@ -848,7 +1562,7 @@ try {
       assert.equal(completed.synthesis.status, "complete");
       assert(completed.synthesis.text.trim());
       assert(!/Mode:/i.test(completed.synthesis.text), "Synthesis leaked mode boilerplate");
-      const synthesis = page.getByRole("region", { name: "Council synthesis" });
+      const synthesis = frontPage();
       await expect(
         synthesis.getByRole("heading", {
           name: "Synthesis · " + summary.synthesizerDisplayName,
@@ -856,7 +1570,7 @@ try {
         }),
       ).toBeVisible();
       await expect(synthesis.locator(".max-council-status")).toHaveText("complete");
-      await synthesis.scrollIntoViewIfNeeded();
+      await expect(page.getByRole("button", { name: "Next page" }).last()).toBeDisabled();
       await gates("completed-synthesis-text");
       assert(
         ((await synthesis.getByRole("heading", { name: "Verdict", exact: true }).count()) &&
@@ -867,29 +1581,35 @@ try {
         "Missing synthesis sections or parse fallback",
       );
     });
+    let continuedThreadId;
     await step("continue-real-answer", async () => {
-      const renderedAnswer = await page
-        .getByRole("region", { name: "Council responses" })
-        .locator("article")
-        .first()
-        .locator(".max-council-answer")
-        .innerText();
-      await page
-        .getByRole("region", { name: "Council responses" })
-        .locator("article")
-        .first()
-        .getByRole("button", { name: "Continue in Agent Mode" })
-        .click();
-      await expect(page).toHaveURL(new RegExp(completed.contenders[0].threadId));
-      await expect(
-        page
-          .locator('[data-message-role="assistant"]')
-          .filter({ hasText: renderedAnswer.trim() })
-          .first(),
-      ).toBeVisible();
+      await pages().focus();
+      await page.keyboard.press("Home");
+      await expectPosition("1 of 3");
+      const frontKey = (await pageOrder())[0];
+      const frontContender = completed.contenders.find((c) => c.key === frontKey);
+      continuedThreadId = frontContender.threadId;
+      const renderedAnswer = await frontPage().locator(".max-council-answer").innerText();
+      await frontPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
+      await expect(page).toHaveURL(new RegExp(frontContender.threadId));
+      // The thread folds a settled turn's earlier messages behind "Worked for...", so it shows the
+      // last message of the Council answer. Whitespace differs around blocks and link chips.
+      const compact = (text) => text.replace(/\s+/g, "");
+      const councilAnswer = compact(renderedAnswer);
+      assert(councilAnswer, "The front page rendered no answer");
+      await expect
+        .poll(async () => {
+          const shown = await page
+            .locator('[data-message-role="assistant"] [data-thread-find-text="true"]')
+            .allInnerTexts();
+          const last = compact(shown.at(-1) ?? "");
+          return last.length > 0 && councilAnswer.endsWith(last);
+        })
+        .toBe(true);
     });
     await step("restored-thread-replies", async () => {
-      const threadId = completed.contenders[0].threadId;
+      // The front page is whichever model finished first, not always the first contender.
+      const threadId = continuedThreadId;
       const before = await engine.rpc("orchestration.getThreadProjection", { threadId });
       assert(!before.thread.archivedAt, "Continue did not restore the thread");
       const expand = page.getByRole("button", { name: "Expand composer", exact: true });
@@ -925,9 +1645,10 @@ try {
     });
     await step("reload-complete-round", async () => {
       await reloadPage();
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
-      ).toHaveText(["complete", "complete"]);
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 3");
+      assert.equal((await pageOrder())[0], summary.firstFinisher.key, "Order survives a reload");
+      await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
       const resumed = await page.evaluate(
         async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
         roundId,
@@ -935,14 +1656,19 @@ try {
       assert.deepEqual(resumed, completed);
     });
     await step("recent-round-reopen", async () => {
-      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      await expectDrawerClosedItself();
       await home();
-      await page.getByRole("button", { name: completed.prompt }).click();
+      await openPanel();
+      await panel().getByRole("button", { name: completed.prompt }).click();
+      await expectDrawerClosedItself();
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
-      ).toHaveText(["complete", "complete"]);
-      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 3");
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      await expectDrawerClosedItself();
       await home();
     });
   }
@@ -951,13 +1677,19 @@ try {
     await expect(page.getByRole("textbox", { name: "Question for the council" })).toHaveCount(0);
   });
   await step("thread-view", async () => {
-    await expect(page.locator("html")).toHaveClass(/dark/);
-    assert.equal(
-      await page
-        .locator("html")
-        .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
-      "#00ff41",
-    );
+    // Agent mode follows the chosen appearance: MAX's branded dark theme, or T3's light theme.
+    if (lightScheme) {
+      await expect(page.locator("html")).not.toHaveClass(/dark/);
+      await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
+    } else {
+      await expect(page.locator("html")).toHaveClass(/dark/);
+      assert.equal(
+        await page
+          .locator("html")
+          .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
+        "#00ff41",
+      );
+    }
     // Agent landing automatically opens a local draft for the most recent project.
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
   });
@@ -982,18 +1714,69 @@ try {
     await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    // With no stored preference MAX starts dark: the first-visit default.
     await expect(page.locator("html")).toHaveClass(/dark/);
+    await restoreScheme();
+    await reloadPage();
     await page.getByRole("button", { name: "Back to Council" }).click();
     await home();
   });
-  await step("phone-360-gates", async () => {
-    await page.setViewportSize({ width: 360, height: 780 });
+  await step("viewport-matrix", async () => {
+    // Layout must follow the window live: phones (and a phone held sideways) get a drawer and a
+    // full-height column; wider windows dock the panel. No reload between sizes.
+    for (const size of VIEWPORTS) {
+      const label = `${size.width}x${size.height}`;
+      await page.setViewportSize(size);
+      await home();
+      const docked = !isPhoneLayout({ ...size, coarsePointer: summary.coarsePointer });
+      if (docked) await expect(panel()).toBeVisible();
+      else await expect(panel()).toBeHidden();
+      await gates(`viewport-${label}-home`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-home.png`) });
+      await openPanel();
+      await expect(panel()).toBeVisible();
+      await gates(`viewport-${label}-panel`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-panel.png`) });
+      if (!docked) {
+        // Change of mind: close the open drawer with its own button (touch) or Escape (computer),
+        // then by Escape on every profile, reopening in between. Focus returns to the toggle each
+        // time; no tooltip may be left behind and no page may turn.
+        await closePanelIfDrawer();
+        await gates(`viewport-${label}-drawer-closed`);
+        await openPanel();
+        await closePanelIfDrawer("escape");
+        await openPanel();
+      }
+      await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
+      await expectDrawerClosedItself();
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 4");
+      const composer = await page
+        .getByRole("button", { name: "Send to council", exact: true })
+        .boundingBox();
+      assert(
+        composer && composer.y + composer.height <= size.height + 1,
+        `Composer must stay inside the ${label} viewport`,
+      );
+      await layoutGate(`viewport-${label}`, { docked });
+      await gates(`viewport-${label}-pages`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-pages.png`) });
+      await openModelWindow();
+      await modelWindow()
+        .getByRole("button", { name: "Choose contender models", exact: true })
+        .click();
+      await expect(page.getByPlaceholder("Search models...")).toBeVisible();
+      await gates(`viewport-${label}-picker`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-picker.png`) });
+      await page.keyboard.press("Escape");
+      await closeModelWindow();
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      await expectDrawerClosedItself();
+      await home();
+    }
+    await page.setViewportSize(viewport);
     await home();
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
-    await expect(page.getByPlaceholder("Search models...")).toBeVisible();
-    await gates("phone-360-picker");
-    await page.screenshot({ path: path.join(artifacts, "phone-360-picker.png"), fullPage: true });
-    await page.keyboard.press("Escape");
   });
   await step("logout", async () => {
     loggingOut = true;
@@ -1008,13 +1791,16 @@ try {
   errors.push(redact(error.stack));
 } finally {
   await cleanup();
+  await copyEvidence();
   const gateFailures = summary.gates.filter(
     (g) =>
       g.overflow ||
       g.truncatedTitles ||
       g.smallTargets.length ||
       g.contrast.length ||
-      g.transparentPanels.length,
+      g.iconContrast.length ||
+      g.transparentPanels.length ||
+      (!desktop && g.tooltips),
   );
   // Ten >200ms tasks across cold boots and a complete walkthrough allow startup work,
   // but fail sustained main-thread stalls. Keep raw durations for comparison across machines.
@@ -1024,15 +1810,32 @@ try {
     count: summary.longTasks.length,
     pass: summary.longTasks.length <= 10,
   };
+  // Page turns: no frame longer than 80 ms and at most two over 34 ms while a page moves.
+  summary.pageTurnSmoothness = {
+    longestFrameMs: 80,
+    maxFramesOver34: 2,
+    turns: summary.pageTurns.length,
+    pass: summary.pageTurns.length > 0 && summary.pageTurns.every((turn) => turn.pass),
+  };
   summary.errors = errors;
   summary.networkFailures = network;
   summary.status =
-    errors.length || network.length || gateFailures.length || !summary.smoothness.pass
+    errors.length ||
+    network.length ||
+    gateFailures.length ||
+    !summary.smoothness.pass ||
+    !summary.pageTurnSmoothness.pass
       ? "fail"
       : "pass";
   await writeFile(path.join(artifacts, "network-failures.json"), JSON.stringify(network, null, 2));
   await writeFile(path.join(artifacts, "console.json"), JSON.stringify(consoleLog, null, 2));
   await writeFile(path.join(artifacts, "summary.json"), JSON.stringify(summary, null, 2));
+  // The evidence copy was taken before the summary existed; it needs the summary too.
+  if (summary.evidence)
+    await NodeFSP.copyFile(
+      path.join(artifacts, "summary.json"),
+      path.join(summary.evidence, "summary.json"),
+    );
   console.log(
     JSON.stringify(
       {
@@ -1042,7 +1845,9 @@ try {
         errors,
         network,
         cleanup: summary.cleanup,
+        pageTurns: summary.pageTurns,
         artifacts,
+        evidence: summary.evidence,
       },
       null,
       2,
