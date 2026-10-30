@@ -1581,12 +1581,14 @@ try {
         "Missing synthesis sections or parse fallback",
       );
     });
+    let continuedThreadId;
     await step("continue-real-answer", async () => {
       await pages().focus();
       await page.keyboard.press("Home");
       await expectPosition("1 of 3");
       const frontKey = (await pageOrder())[0];
       const frontContender = completed.contenders.find((c) => c.key === frontKey);
+      continuedThreadId = frontContender.threadId;
       const renderedAnswer = await frontPage().locator(".max-council-answer").innerText();
       await frontPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
       await expect(page).toHaveURL(new RegExp(frontContender.threadId));
@@ -1606,7 +1608,8 @@ try {
         .toBe(true);
     });
     await step("restored-thread-replies", async () => {
-      const threadId = completed.contenders[0].threadId;
+      // The front page is whichever model finished first, not always the first contender.
+      const threadId = continuedThreadId;
       const before = await engine.rpc("orchestration.getThreadProjection", { threadId });
       assert(!before.thread.archivedAt, "Continue did not restore the thread");
       const expand = page.getByRole("button", { name: "Expand composer", exact: true });
