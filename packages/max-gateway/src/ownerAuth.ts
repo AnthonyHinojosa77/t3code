@@ -35,3 +35,18 @@ export function maximusSessionOwnerAuth(
     return isValidSession(session);
   };
 }
+
+/**
+ * Only the configured owner's session reaches the Mini. Any other account (for example
+ * one created while public plans are enabled) is treated as anonymous.
+ */
+export function isOwnerSession(
+  readSession: (session: string) => { readonly email: string } | null,
+  ownerEmail: string | null,
+): (session: string) => boolean {
+  const owner = ownerEmail?.trim().toLowerCase();
+  return (session) => {
+    if (!owner) return false;
+    return readSession(session)?.email.trim().toLowerCase() === owner;
+  };
+}

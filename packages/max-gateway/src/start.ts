@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { isPersonalMode, readOwnerEmail, warnIfOwnerEmailMissing } from "./auth/personalMode.ts";
 import { openAuthStore, resolveAuthDbPath } from "./auth/store.ts";
-import { maximusSessionOwnerAuth } from "./ownerAuth.ts";
+import { isOwnerSession, maximusSessionOwnerAuth } from "./ownerAuth.ts";
 import { defaultWebDist } from "./staticApp.ts";
 import { startTunnelServer } from "./tunnelServer.ts";
 
@@ -29,6 +29,7 @@ export async function main(): Promise<void> {
   }
   warnIfOwnerEmailMissing();
   const authStore = openAuthStore(resolveAuthDbPath());
+  const ownerEmail = readOwnerEmail();
   authStore.pruneExpired();
   const server = await startTunnelServer({
     host: process.env.HOST ?? "0.0.0.0",
@@ -37,9 +38,11 @@ export async function main(): Promise<void> {
     authStore,
     commit: process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
     personalMode: isPersonalMode(),
-    ownerEmail: readOwnerEmail(),
+    ownerEmail,
     webDist: resolveWebDist(),
-    isOwnerRequest: maximusSessionOwnerAuth((session) => authStore.readSession(session) !== null),
+    isOwnerRequest: maximusSessionOwnerAuth(
+      isOwnerSession((session) => authStore.readSession(session), ownerEmail),
+    ),
   });
   process.stderr.write(`max-gateway listening on ${server.port}\n`);
 }
