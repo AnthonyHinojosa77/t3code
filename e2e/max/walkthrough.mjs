@@ -736,6 +736,7 @@ try {
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
     });
     await step("reload-complete-round", async () => {
+      await page.waitForLoadState("networkidle");
       await page.reload();
       await expect(
         page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
@@ -778,17 +779,20 @@ try {
     await home();
   });
   await step("reload-session", async () => {
+    await page.waitForLoadState("networkidle");
     await page.reload();
     await home();
   });
   await step("explicit-appearance-preference", async () => {
     await page.getByRole("button", { name: "Agent", exact: true }).click();
     await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
+    await page.waitForLoadState("networkidle");
     await page.reload();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator("html")).not.toHaveClass(/dark/);
     await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
     await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
+    await page.waitForLoadState("networkidle");
     await page.reload();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator("html")).toHaveClass(/dark/);
