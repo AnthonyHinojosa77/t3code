@@ -78,7 +78,7 @@ export function MaxCouncilRounds({ roundId }: { roundId: string | undefined }) {
     }
     return model;
   };
-  const continueThread = (threadId: string) => {
+  const continueThread = async (threadId: string) => {
     if (!roundId || !round) return;
     const environmentId =
       projects.find((entry) => entry.id === round.projectId)?.environmentId ??
@@ -86,6 +86,13 @@ export function MaxCouncilRounds({ roundId }: { roundId: string | undefined }) {
       primaryEnvironmentId;
     if (!environmentId) {
       setActionError("Connect the council’s computer to open this thread.");
+      return;
+    }
+    setActionError(null);
+    try {
+      await councilApi.continueThread(roundId, threadId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not restore council thread");
       return;
     }
     sessionStorage.setItem(

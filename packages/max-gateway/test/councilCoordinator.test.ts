@@ -46,6 +46,7 @@ describe("council coordinator", () => {
       await vi.advanceTimersByTimeAsync(1001);
       expect(f.store.get(r.id).contenders.every((c) => c.status === "timed-out")).toBe(true);
       expect(f.engine.interrupts).toHaveLength(2);
+      await vi.waitFor(() => expect(f.engine.archives).toHaveLength(2));
     } finally {
       vi.useRealTimers();
     }
@@ -57,6 +58,7 @@ describe("council coordinator", () => {
     expect(f.coordinator.cancel(r.id).status).toBe("cancelled");
     expect(f.engine.interrupts).toHaveLength(2);
     expect(f.engine.launches).toHaveLength(2);
+    await vi.waitFor(() => expect(f.engine.archives).toHaveLength(2));
   });
   it("resumes persisted threads and starts due synthesis without a GET", async () => {
     using f = fixture();
@@ -116,4 +118,80 @@ it("places the council preface exactly once before role text", async () => {
   } finally {
     coordinator.close();
   }
+});
+
+it("archives each finished thread after detaching, without hiding running or attention threads", async () => {
+  using f = fixture();
+  const r = f.coordinator.create(input);
+  await Promise.resolve();
+  const [first, second] = r.contenders.map((c) => c.threadId!);
+  f.engine.update(first!, "needs-attention");
+  expect(f.engine.archives).toEqual([]);
+  f.engine.update(first!, "complete", "saved answer");
+  expect(f.engine.callbacks.has(first!)).toBe(false);
+  await vi.waitFor(() => expect(f.engine.archives).toEqual([first]));
+  expect(f.engine.callbacks.has(second!)).toBe(true);
+  f.engine.update(second!, "failed");
+  await vi.waitFor(() => expect(f.engine.archives).toContain(second));
+  const synthesis = f.store.get(r.id).synthesis.threadId!;
+  f.engine.update(synthesis, "complete");
+  await vi.waitFor(() => expect(f.engine.archives).toContain(synthesis));
+  expect(f.store.get(r.id).contenders[0]?.text).toBe("saved answer");
+});
+
+it("archive failures leave rounds complete and retry once on restart, except continued threads", async () => {
+  using f = fixture();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const archive = vi.spyOn(f.engine, "archive").mockRejectedValue(new Error("offline"));
+  try {
+    const r = f.coordinator.create(input);
+    await Promise.resolve();
+    for (const c of r.contenders) f.engine.update(c.threadId!, "failed");
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(f.store.get(r.id).status).toBe("failed");
+    archive.mockRestore();
+    const restarted = new CouncilCoordinator(f.store, f.templates, f.engine);
+    restarted.resume();
+    await vi.waitFor(() => expect(f.engine.archives).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(f.store.get(r.id).contenders.every((s) => !!s.archivedAt)).toBe(true),
+    );
+    restarted.resume();
+    await Promise.resolve();
+    expect(f.engine.archives).toHaveLength(2);
+    await restarted.continueThread(r.id, r.contenders[0]!.threadId!);
+    expect(f.engine.unarchives).toEqual([r.contenders[0]!.threadId]);
+    expect(f.store.get(r.id).contenders[0]?.continuedAt).toBeTruthy();
+    restarted.close();
+    const nextEngine = new FakeEngine();
+    const next = new CouncilCoordinator(f.store, f.templates, nextEngine);
+    next.resume();
+    await Promise.resolve();
+    expect(nextEngine.archives).toEqual([]);
+    next.close();
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+it("serializes continue behind an unfinished archive", async () => {
+  using f = fixture();
+  const r = f.coordinator.create(input);
+  await Promise.resolve();
+  let release!: () => void;
+  vi.spyOn(f.engine, "archive").mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const id = r.contenders[0]!.threadId!;
+  f.engine.update(id, "complete");
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  const continuing = f.coordinator.continueThread(r.id, id);
+  expect(f.engine.unarchives).toEqual([]);
+  release();
+  await continuing;
+  expect(f.store.get(r.id).contenders[0]?.continuedAt).toBeTruthy();
+  expect(f.engine.unarchives).toEqual([id]);
 });

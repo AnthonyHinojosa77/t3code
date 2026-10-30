@@ -261,8 +261,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
     if (frame.type === FrameType.httpRequestEnd) {
       const stream = streams.get(frame.streamId);
       if (stream?.kind === "council") {
-        replyCouncil(
-          frame.streamId,
+        void Promise.resolve(
           isAnonymousRequest(stream.request.headers)
             ? { status: 401, body: { error: "Owner authentication required" } }
             : councilRoute(
@@ -271,7 +270,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
                 stream.request.path,
                 Buffer.concat(stream.chunks),
               ),
-        );
+        ).then((response) => replyCouncil(frame.streamId, response));
         return;
       }
       if (stream?.kind !== "http" || stream.ended) return;

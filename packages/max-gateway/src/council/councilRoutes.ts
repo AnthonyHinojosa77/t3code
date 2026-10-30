@@ -5,12 +5,12 @@ export interface CouncilResponse {
   status: number;
   body?: unknown;
 }
-export function councilRoute(
+export async function councilRoute(
   coordinator: CouncilCoordinator,
   method: string,
   path: string,
   body: Buffer,
-): CouncilResponse {
+): Promise<CouncilResponse> {
   try {
     if (body.length > COUNCIL_BODY_LIMIT)
       throw new CouncilError(400, "Request body exceeds 256 KB");
@@ -38,6 +38,23 @@ export function councilRoute(
       }
     }
     if (parts[2] === "rounds") {
+      if (
+        parts.length === 7 &&
+        parts[4] === "threads" &&
+        parts[6] === "continue" &&
+        method === "POST"
+      )
+        return coordinator.continueThread(parts[3]!, parts[5]!).then(
+          (body) => ({ status: 200, body }),
+          (error: unknown) => ({
+            status: error instanceof CouncilError ? error.status : 502,
+            body: {
+              error:
+                error instanceof CouncilError ? error.message : "Could not restore council thread",
+            },
+          }),
+        );
+
       if (parts.length === 3 && method === "POST")
         return { status: 201, body: { round: coordinator.create(json()) } };
       if (parts.length === 3 && method === "GET") {

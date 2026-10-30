@@ -145,3 +145,48 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([true, false])(
+  "accepts an idempotent archive state (%s) only after reading projection",
+  async (archived) => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    let matches = true;
+    server.on("connection", (socket) => {
+      socket.on("message", (bytes) => {
+        const frame = JSON.parse(bytes.toString());
+        socket.send(
+          JSON.stringify({
+            _tag: "Exit",
+            requestId: frame.id,
+            exit:
+              frame.tag === "orchestration.dispatchCommand"
+                ? { _tag: "Failure", cause: {} }
+                : {
+                    _tag: "Success",
+                    value: {
+                      thread: {
+                        archivedAt: (matches ? archived : !archived) ? "2026-10-30" : null,
+                      },
+                    },
+                  },
+          }),
+        );
+      });
+    });
+    const engine = new EngineClient(
+      new BearerTokenSource({ env: { MAX_COMPANION_BEARER_TOKEN: "fixture-token" } }),
+      `ws://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}`,
+    );
+    try {
+      const change = () => (archived ? engine.archive("test") : engine.unarchive("test"));
+      await expect(change()).resolves.toBeUndefined();
+      matches = false;
+      await expect(change()).rejects.toThrow("Engine RPC rejected");
+    } finally {
+      engine.close();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  },
+);

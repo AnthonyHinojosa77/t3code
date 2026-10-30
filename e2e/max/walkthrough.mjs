@@ -776,6 +776,18 @@ try {
         assert.equal(completed.status, "complete");
       }).toPass({ timeout: 240000, intervals: [1500] });
       summary.researchEvidence = researchRound ? completed : undefined;
+      await expect(async () => {
+        for (const state of [...completed.contenders, completed.synthesis]) {
+          const projection = await engine.rpc("orchestration.getThreadProjection", {
+            threadId: state.threadId,
+          });
+          assert(projection.thread?.archivedAt, "Coordinator has not archived " + state.threadId);
+          assert(
+            projection.messages.some((m) => m.role === "assistant" && m.text.trim()),
+            "Archived answer is unreadable",
+          );
+        }
+      }).toPass({ timeout: 30000 });
       summary.projections = await Promise.all(
         [...completed.contenders, completed.synthesis]
           .filter((c) => c.threadId)
@@ -786,6 +798,7 @@ try {
             return {
               threadId: c.threadId,
               runtimeMode: projection.thread?.runtimeMode,
+              archivedAt: projection.thread?.archivedAt,
               runs: projection.runs,
               runtimeRequests: projection.runtimeRequests,
               turnItems: projection.turnItems,
@@ -874,6 +887,37 @@ try {
           .filter({ hasText: renderedAnswer.trim() })
           .first(),
       ).toBeVisible();
+    });
+    await step("restored-thread-replies", async () => {
+      const threadId = completed.contenders[0].threadId;
+      const before = await engine.rpc("orchestration.getThreadProjection", { threadId });
+      assert(!before.thread.archivedAt, "Continue did not restore the thread");
+      const expand = page.getByRole("button", { name: "Expand composer", exact: true });
+      if (await expand.isVisible()) await expand.click();
+      await page
+        .locator('[contenteditable="true"]:visible, textarea:visible')
+        .first()
+        .fill("Reply with exactly one word: restored");
+      await page
+        .locator('[contenteditable="true"]:visible, textarea:visible')
+        .first()
+        .press("Enter");
+      await expect(async () => {
+        const after = await engine.rpc("orchestration.getThreadProjection", { threadId });
+        assert(after.runs.length > before.runs.length, "No new provider turn");
+        assert.equal(after.runs.at(-1).status, "completed");
+        assert(
+          after.messages.filter((m) => m.role === "assistant").length >
+            before.messages.filter((m) => m.role === "assistant").length,
+          "No resumed reply",
+        );
+        assert(!after.thread.archivedAt, "Continued thread was re-archived");
+      }).toPass({ timeout: 120000 });
+      summary.continuedThread = threadId;
+      completed = await page.evaluate(
+        async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
+        roundId,
+      );
     });
     await step("return-same-round", async () => {
       await page.getByRole("button", { name: "Back to Council" }).click();

@@ -141,6 +141,11 @@ export const councilApi = {
     request<{ round: CouncilRound }>("/rounds", "POST", input),
   round: (id: string, signal?: AbortSignal) =>
     request<{ round: CouncilRound }>(`/rounds/${encodeURIComponent(id)}`, "GET", undefined, signal),
+  continueThread: (id: string, threadId: string) =>
+    request<{ threadId: string }>(
+      `/rounds/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/continue`,
+      "POST",
+    ),
   cancelRound: (id: string) =>
     request<{ round: CouncilRound }>(`/rounds/${encodeURIComponent(id)}/cancel`, "POST"),
 };
