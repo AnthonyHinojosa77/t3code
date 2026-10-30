@@ -25,6 +25,8 @@ import {
   type ThemePreferenceMode,
 } from "../themePalette";
 
+import { APP_BASE_NAME } from "../branding";
+
 type Theme = ThemePreference;
 type ThemeSnapshot = {
   theme: Theme;
@@ -40,8 +42,8 @@ type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
 const STORAGE_KEY = "t3code:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
-  theme: "system",
-  resolvedTheme: "light",
+  theme: APP_BASE_NAME === "MAX" ? "dark" : "system",
+  resolvedTheme: APP_BASE_NAME === "MAX" ? "dark" : "light",
   systemDark: false,
   followSystem: true,
   appearanceMode: "system",
@@ -334,6 +336,10 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
   );
   applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
+  document.documentElement.toggleAttribute(
+    "data-max-default-theme",
+    APP_BASE_NAME === "MAX" && theme === "dark" && resolvedAppearance === "dark",
+  );
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);

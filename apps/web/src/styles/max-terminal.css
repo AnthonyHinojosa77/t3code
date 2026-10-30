@@ -1,51 +1,7 @@
-/* MAX terminal look. Every rule sits under `.max-scope`, so stock T3 screens are untouched.
-   Layered as components so Tailwind utilities on the same element still win. */
+/* MAX palette is shared with portals and the branded default Agent theme.
+   Desktop T3 and explicit appearance choices retain their own palette. */
 @layer components {
   .max-scope {
-    --max-black: #0a0a0a;
-    --max-darker: #1a1a1a;
-    --max-line: #2a2a2a;
-    --max-line-strong: #3a3a3a;
-    --max-light: #e0e0e0;
-    /* Muted text also passes 4.5:1 on the lighter hover surface (#2a2a2a). */
-    --max-muted: #949494;
-    --max-green: #00ff41;
-    --max-amber: #ffb000;
-    --max-bright: #f5f5f5;
-    --max-panel: #111111;
-    --max-form-border: #333333;
-    --max-track: #222222;
-    --max-error: #ff5c5c;
-
-    --background: var(--max-black);
-    --foreground: var(--max-light);
-    --card: var(--max-panel);
-    --card-foreground: var(--max-light);
-    --popover: var(--max-panel);
-    --popover-foreground: var(--max-light);
-    --primary: var(--max-green);
-    --primary-foreground: var(--max-black);
-    --secondary: var(--max-darker);
-    --secondary-foreground: var(--max-light);
-    --muted: var(--max-darker);
-    --muted-foreground: var(--max-muted);
-    --placeholder: var(--max-muted);
-    --accent: var(--max-line);
-    --accent-foreground: var(--max-light);
-    --border: var(--max-line-strong);
-    --input: var(--max-line-strong);
-    --ring: var(--max-green);
-    --error: var(--max-error);
-    --error-foreground: var(--max-error);
-    --destructive: var(--max-error);
-    --destructive-foreground: var(--max-black);
-    --toolbar-background: var(--max-black);
-    --toolbar-foreground: var(--max-light);
-    --toolbar-border: var(--max-line);
-    --toolbar-control: var(--max-panel);
-    --toolbar-control-foreground: var(--max-light);
-    --toolbar-control-hover: var(--max-line);
-
     background-color: var(--max-black);
     color: var(--max-light);
     font-family:
@@ -73,4 +29,90 @@
       text-shadow: none;
     }
   }
+}
+
+/* Portals live beside the application root. Carry MAX tokens to that root while
+   a council/auth surface is mounted, including when the OS prefers light. */
+:root:has(.max-scope)
+  :is(
+    [data-slot="popover-popup"],
+    [data-slot="menu-popup"],
+    [data-slot="select-popup"],
+    [role="dialog"]
+  ) {
+  background: var(--max-panel) !important;
+  color: var(--max-light);
+  backdrop-filter: none;
+}
+.max-scope {
+  --contrast-foreground: var(--max-light);
+  --contrast-muted-foreground: var(--max-muted);
+  --contrast-popover-foreground: var(--max-light);
+  --contrast-primary: var(--max-green);
+}
+:root[data-max-default-theme] {
+  --primary: var(--max-green) !important;
+  --primary-foreground: var(--max-black) !important;
+}
+.max-scope .max-council-answer .chat-markdown {
+  color: var(--max-light);
+}
+.max-scope .max-council-models button {
+  color: var(--max-light);
+}
+
+.max-scope,
+:root[data-max-default-theme],
+:root:has(.max-scope) {
+  --max-black: #0a0a0a;
+  --max-darker: #1a1a1a;
+  --max-line: #2a2a2a;
+  --max-line-strong: #3a3a3a;
+  --max-light: #e0e0e0;
+  /* Muted text also passes 4.5:1 on the lighter hover surface (#2a2a2a). */
+  --max-muted: #949494;
+  --max-green: #00ff41;
+  --max-amber: #ffb000;
+  --max-bright: #f5f5f5;
+  --max-panel: #111111;
+  --max-form-border: #333333;
+  --max-track: #222222;
+  --max-error: #ff5c5c;
+
+  --background: var(--max-black);
+  --foreground: var(--max-light);
+  --card: var(--max-panel);
+  --card-foreground: var(--max-light);
+  --popover: var(--max-panel);
+  --popover-foreground: var(--max-light);
+  --primary: var(--max-green);
+  --primary-foreground: var(--max-black);
+  --secondary: var(--max-darker);
+  --secondary-foreground: var(--max-light);
+  --muted: var(--max-darker);
+  --muted-foreground: var(--max-muted);
+  --placeholder: var(--max-muted);
+  --accent: var(--max-line);
+  --accent-foreground: var(--max-light);
+  --border: var(--max-line-strong);
+  --input: var(--max-line-strong);
+  --ring: var(--max-green);
+  --error: var(--max-error);
+  --error-foreground: var(--max-error);
+  --destructive: var(--max-error);
+  --destructive-foreground: var(--max-black);
+  --toolbar-background: var(--max-black);
+  --toolbar-foreground: var(--max-light);
+  --toolbar-border: var(--max-line);
+  --toolbar-control: var(--max-panel);
+  --toolbar-control-foreground: var(--max-light);
+  --toolbar-control-hover: var(--max-line);
+}
+
+/* Shared picker hints use opacity in T3; MAX's muted token already encodes
+   secondary emphasis and must retain its contrast on hover surfaces. */
+:root:has(.max-scope)
+  :is([data-slot="popover-popup"], [data-slot="menu-popup"], [data-slot="select-popup"])
+  [class*="text-muted-foreground/"] {
+  color: var(--max-muted);
 }

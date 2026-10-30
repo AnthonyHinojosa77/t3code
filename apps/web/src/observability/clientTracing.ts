@@ -86,6 +86,21 @@ export function configureClientTracing(config: ClientTracingConfig = {}): Promis
   return pendingConfiguration;
 }
 
+/** Stop page-lifetime exporters before the owning session is revoked. */
+export function stopClientTracing(): Promise<void> {
+  pendingConfiguration = pendingConfiguration.finally(async () => {
+    ++configurationGeneration;
+    ClientTracer.setDelegate(null);
+    const runtime = activeRuntime;
+    const scope = activeScope;
+    activeRuntime = null;
+    activeScope = null;
+    activeConfigKey = null;
+    await disposeTracerRuntime(runtime, scope);
+  });
+  return pendingConfiguration;
+}
+
 async function applyClientTracingConfig(config: ClientTracingConfig): Promise<void> {
   const otlpTracesUrl = resolvePrimaryEnvironmentHttpUrl("/api/observability/v1/traces");
   const exportIntervalMs = Math.max(10, config.exportIntervalMs ?? DEFAULT_EXPORT_INTERVAL_MS);

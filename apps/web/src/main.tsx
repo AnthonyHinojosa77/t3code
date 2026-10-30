@@ -1,4 +1,4 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 
 import "@fontsource-variable/inter";
@@ -6,11 +6,15 @@ import "./index.css";
 
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
 import { isElectron } from "./env";
-import { startAppServices } from "./appInit";
-import { AppRoot } from "./AppRoot";
+import { MaxAuthGate } from "./components/max/MaxAuthGate";
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
 
-const router = startAppServices();
+import { APP_BASE_NAME } from "./branding";
+import { installMaxSessionTransport } from "./components/max/maxSessionTransport";
+
+if (APP_BASE_NAME === "MAX") installMaxSessionTransport();
+
+const AuthenticatedApp = lazy(() => import("./MaxAuthenticatedApp"));
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
@@ -24,7 +28,13 @@ window.addEventListener("vite:preloadError", (event) => {
   }
 });
 
-const app = <AppRoot router={router} />;
+const app = (
+  <MaxAuthGate>
+    <Suspense fallback={<p role="status">Connecting to MAX…</p>}>
+      <AuthenticatedApp />
+    </Suspense>
+  </MaxAuthGate>
+);
 
 // Split by runtime to keep Clerk out of local startup and clerk-js out of browser builds.
 const managedAuthShellModule =
@@ -34,12 +44,11 @@ const managedAuthShellModule =
       : import("./components/clerk/BrowserManagedAuthShell")
     : null;
 
-export const startup = Promise.all([
+export const startup = Promise.resolve(
   managedAuthShellModule?.then((module) => module.default) ?? null,
-  router.load(),
-])
-  .then(([ManagedAuthShell]) => {
-    // Route chunk failures resolve router.load() and surface later through the error boundary.
+)
+  .then((ManagedAuthShell) => {
+    // Authenticated route loading happens inside the lazy application module.
     if (reloadScheduled) return;
     if (!chunkLoadFailed) clearChunkReloadGuard();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

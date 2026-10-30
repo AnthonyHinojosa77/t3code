@@ -437,3 +437,13 @@ describe("an Arabic line", () => {
     );
   });
 });
+
+it("can dispose a composer whose Tiptap view already detached", async () => {
+  await using screen = await render(composer("draft"));
+  const editor = editorIn(screen.container);
+  await act(async () => {
+    editor.destroy();
+  });
+  await screen.rerender(<div>Closed</div>);
+  await expect.element(screen.getByText("Closed")).toBeVisible();
+});

@@ -832,14 +832,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <WindowKeyDownListener onKeyDown={onWindowKeyDown} />
       <div
         ref={pickerContentRef}
-        className="relative flex max-h-86.5 w-screen max-w-90 flex-row overflow-hidden"
-        style={
-          isSearching
+        className="relative flex max-h-86.5 flex-row overflow-hidden"
+        style={{
+          width: "min(calc(var(--spacing) * 90), calc(100vw - 2rem))",
+          ...(isSearching
             ? { height: searchHeight }
             : {
                 minHeight: `min(calc(var(--spacing) * ${tallestTabUnits + LIST_CHROME_UNITS} + 1px), calc(var(--spacing) * 86.5))`,
-              }
-        }
+              }),
+        }}
         data-model-picker-content="true"
       >
         {showSidebar && (

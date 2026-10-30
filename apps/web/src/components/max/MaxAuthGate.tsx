@@ -1,6 +1,7 @@
+import { resumeMaxSessionTransport, stopMaxSessionServices } from "./maxSessionTransport";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useState,
@@ -53,7 +54,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = useStableCallback(async () => {
     const response = await fetch("/api/auth/me", { credentials: "include" });
     if (!response.ok) {
       setUser(null);
@@ -64,13 +65,16 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
       setUser(null);
       return;
     }
+    resumeMaxSessionTransport();
     setUser(data.user);
     setPersonalMode(data.personalMode === true);
-  }, []);
+  });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Bootstrap the external cookie session before mounting authenticated T3.
   useEffect(() => {
     let cancelled = false;
-    refreshUser()
+    void Promise.resolve()
+      .then(refreshUser)
       .catch(() => {
         if (!cancelled) setUser(null);
       })
@@ -82,8 +86,15 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     };
   }, [refreshUser]);
 
-  const logout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+  const logout = useStableCallback(async () => {
+    // Close admission and cancel requests before any asynchronous logout work.
+    await stopMaxSessionServices();
+    const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    await response.text();
+    if (!response.ok) {
+      resumeMaxSessionTransport();
+      throw new Error("Could not sign out. Try again.");
+    }
     setUser(null);
     setEmail("");
     setPassword("");
@@ -93,7 +104,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     setMode("login");
     // T3 resolves its own sign-in once per page load, so start over without the session.
     window.location.assign("/");
-  }, []);
+  });
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -118,8 +129,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
         setError(data.error ?? `Request failed: ${response.status}`);
         return;
       }
-      // Reload so T3's bootstrap runs again, now with the MAX cookie and the Mini's bearer.
-      window.location.assign("/");
+      // Start T3 only after the credentials response has been fully consumed.
+      await refreshUser();
     };
     // Promise handlers, not try/finally: React Compiler cannot lower a `finally` clause.
     await sendCredentials()
@@ -213,7 +224,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded bg-(--max-green) px-3 py-2 text-xs font-bold tracking-widest text-(--max-black) disabled:opacity-60"
+            className="min-h-10 w-full rounded bg-(--max-green) px-3 py-2 text-xs font-bold tracking-widest text-(--max-black) disabled:opacity-60"
           >
             {submitting ? "PLEASE WAIT" : mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
           </button>

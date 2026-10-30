@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { usePrimaryEnvironmentId, useEnvironmentProviders } from "../../state/environments";
 import { useProjects } from "../../state/entities";
+import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import { getDisplayModelName } from "../chat/providerIconUtils";
 import {
   councilApi,
@@ -72,7 +73,8 @@ export function MaxCouncilRounds({ roundId }: { roundId: string | undefined }) {
     for (const entries of providers.values()) {
       const provider = entries.find((entry) => entry.instanceId === instanceId);
       const option = provider?.models.find((entry) => entry.slug === model);
-      if (option) return getDisplayModelName(option);
+      if (option && provider)
+        return getDisplayModelName(option) + " · " + resolveProviderInstanceDisplayName(provider);
     }
     return model;
   };

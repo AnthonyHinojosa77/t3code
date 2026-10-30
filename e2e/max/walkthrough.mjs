@@ -1,3 +1,4 @@
+import { visualGates } from "./visualGates.mjs";
 import * as NodeAssert from "node:assert/strict";
 const assert = NodeAssert.default;
 import * as NodeChildProcess from "node:child_process";
@@ -18,11 +19,35 @@ import * as NodePath from "node:path";
 const path = NodePath;
 import * as NodeURL from "node:url";
 const { fileURLToPath } = NodeURL;
+import * as NodeSqlite from "node:sqlite";
+const { DatabaseSync } = NodeSqlite;
+import { EngineClient } from "../../packages/max-gateway/src/council/engineClient.ts";
 import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium, expect } = require("playwright/test");
+// By default a full acceptance run covers both OS appearances; only the dark
+// pass spends a real round. Explicit scheme flags support no-round iteration.
+if (
+  !process.argv.includes("--single-scheme") &&
+  !process.argv.includes("--light") &&
+  !process.argv.includes("--no-round")
+) {
+  for (const flags of [
+    ["--single-scheme"],
+    ["--single-scheme", "--light", "--no-round", "--skip-build"],
+  ]) {
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.url), ...process.argv.slice(2), ...flags],
+      { stdio: "inherit" },
+    );
+    const [code] = await once(child, "close");
+    if (code !== 0) process.exit(code ?? 1);
+  }
+  process.exit(0);
+}
 const dir = await mkdtemp(path.join(tmpdir(), "t3mc-e2e-"));
 const artifacts = path.join(
   root,
@@ -31,19 +56,28 @@ const artifacts = path.join(
 );
 await mkdir(artifacts, { recursive: true });
 const summary = {
+  colorScheme: process.argv.includes("--light") ? "light" : "dark",
   status: "running",
-  viewport: "390x844@3",
+  viewport: process.argv.includes("--no-round") ? "360x780@3" : "390x844@3",
   steps: [],
   gates: [],
   longTasks: [],
   usage: [],
   threadsCreated: [],
+  realRounds: 0,
   cleanup: {},
+  cancelledAtLogout: [],
+  cancelledAtReload: [],
 };
 const errors = [],
   network = [],
   consoleLog = [],
   children = new Set();
+let loggingOut = false;
+let reloading = false;
+const activeRequests = new Set();
+const requestsBeforeReload = new WeakSet();
+const startedDuringLogout = new WeakSet();
 const providerEvidence = new Map();
 function collectProviders(value) {
   if (!value || typeof value !== "object") return;
@@ -54,6 +88,7 @@ function collectProviders(value) {
           instanceId: provider.instanceId,
           name: provider.displayName ?? provider.driver,
           windows: provider.usageLimits?.windows ?? [],
+          provider,
         });
     }
   for (const nested of Object.values(value))
@@ -76,7 +111,9 @@ const isWindows = NodeOS.platform() === "win32";
 let sessionId,
   browser,
   page,
-  stopping = false;
+  stopping = false,
+  engine,
+  roundId;
 function start(command, args, extra = {}) {
   const child = spawn(command, args, {
     cwd: root,
@@ -170,6 +207,36 @@ async function cleanup() {
   if (stopped.some((result) => result.status === "rejected"))
     errors.push("Child process cleanup failed");
   summary.cleanup.processesStopped = children.size === 0;
+  if (engine) {
+    // Read only our temporary store after the companion stops: logout cannot hide
+    // a late-created synthesis thread from teardown.
+    if (roundId) {
+      const db = new DatabaseSync(path.join(dir, "council.sqlite"), { readOnly: true });
+      try {
+        const row = db.prepare("SELECT body FROM rounds WHERE id=?").get(roundId);
+        const round = JSON.parse(row.body);
+        const states = [...round.contenders, round.synthesis].filter((s) => s.threadId);
+        summary.threadsCreated = [...new Set(states.map((s) => s.threadId))];
+        for (const state of states)
+          if (["pending", "running", "needs-attention"].includes(state.status))
+            await engine.interrupt(state.threadId);
+      } catch {
+        errors.push("Could not collect or stop final round threads");
+      } finally {
+        db.close();
+      }
+    }
+    summary.cleanup.threadsArchived = [];
+    for (const id of summary.threadsCreated) {
+      try {
+        await engine.archive(id);
+        summary.cleanup.threadsArchived.push(id);
+      } catch {
+        errors.push("Failed to archive test thread " + id);
+      }
+    }
+    engine.close();
+  }
   if (sessionId) {
     try {
       await run(t3, ["auth", "session", "revoke", sessionId], {}, true);
@@ -191,6 +258,16 @@ function safeUrl(url) {
   return u.origin + u.pathname;
 }
 async function gates(name) {
+  // Measure settled UI, not a fade's initial transparent frame. Infinite status
+  // pulses are deliberately left running.
+  await page.evaluate(async () => {
+    await Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => {})),
+    );
+  });
   const result = await page.evaluate(() => {
     const visible = (el) =>
       el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
@@ -199,7 +276,7 @@ async function gates(name) {
     );
     const primary = [
       ...document.querySelectorAll(
-        'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"]',
+        'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], .max-council-button, .max-council-models button, .max-scope select',
       ),
     ].filter(visible);
     return {
@@ -211,10 +288,11 @@ async function gates(name) {
           width: el.getBoundingClientRect().width,
           height: el.getBoundingClientRect().height,
         }))
-        .filter((x) => x.width < 32 || x.height < 32),
+        .filter((x) => x.width < 40 || x.height < 40),
     };
   });
-  summary.gates.push({ step: name, ...result });
+  const visual = await page.evaluate(visualGates);
+  summary.gates.push({ step: name, ...result, ...visual });
 }
 async function step(name, fn) {
   const row = { name, status: "running", startedAt: new Date().toISOString() };
@@ -238,6 +316,18 @@ async function step(name, fn) {
     if (page && !page.isClosed()) await page.screenshot({ path: row.screenshot, fullPage: true });
   }
 }
+async function reloadPage() {
+  await page.waitForLoadState("networkidle");
+  for (const request of activeRequests) requestsBeforeReload.add(request);
+  reloading = true;
+  try {
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+  } finally {
+    reloading = false;
+  }
+}
+
 async function home() {
   await expect(page.getByText("MAX", { exact: true }).first()).toBeVisible({ timeout: 60000 });
   await expect(page.getByRole("textbox", { name: "Question for the council" })).toBeVisible({
@@ -310,6 +400,7 @@ try {
     ),
   );
   sessionId = issued.sessionId;
+  engine = new EngineClient({ getToken: async () => issued.token });
   secrets.push(issued.token);
   assert(sessionId && issued.token, "CLI did not return session and token");
   await writeFile(
@@ -331,7 +422,10 @@ try {
   await ready(companion, "max companion tunnel connected");
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
+    viewport: process.argv.includes("--no-round")
+      ? { width: 360, height: 780 }
+      : { width: 390, height: 844 },
+    colorScheme: summary.colorScheme,
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -381,15 +475,72 @@ try {
     )
       network.push({ path: u.pathname, status: res.status() });
   });
+  page.on("requestfinished", (req) => activeRequests.delete(req));
+  page.on("request", (req) => {
+    activeRequests.add(req);
+    if (!loggingOut) return;
+    startedDuringLogout.add(req);
+    const url = new URL(req.url());
+    if (
+      url.origin === base &&
+      url.pathname.startsWith("/api/") &&
+      !["/api/auth/logout", "/api/auth/me"].includes(url.pathname)
+    ) {
+      network.push({
+        path: url.pathname,
+        failure: "Authenticated request started after logout began",
+      });
+    }
+  });
   page.on("requestfailed", (req) => {
+    activeRequests.delete(req);
+    if (
+      reloading &&
+      requestsBeforeReload.has(req) &&
+      req.failure()?.errorText === "net::ERR_ABORTED"
+    ) {
+      summary.cancelledAtReload.push(new URL(req.url()).pathname);
+      return;
+    }
+    if (
+      loggingOut &&
+      !startedDuringLogout.has(req) &&
+      req.failure()?.errorText === "net::ERR_ABORTED"
+    ) {
+      summary.cancelledAtLogout.push(new URL(req.url()).pathname);
+      return;
+    }
     if (stopping) return; // Closing our browser intentionally aborts outstanding reads.
     if (new URL(req.url()).origin === base)
-      network.push({ path: new URL(req.url()).pathname, failure: req.failure()?.errorText });
+      network.push({
+        path: new URL(req.url()).pathname,
+        step: summary.steps.at(-1)?.name,
+        failure: req.failure()?.errorText,
+      });
+  });
+  const anonymousTraffic = [];
+  const recordAnonymous = (req) => {
+    const u = new URL(req.url());
+    if (
+      u.origin === base &&
+      (u.pathname === "/ws" || (u.pathname.startsWith("/api/") && u.pathname !== "/api/auth/me"))
+    )
+      anonymousTraffic.push(u.pathname);
+  };
+  page.on("request", recordAnonymous);
+  page.on("websocket", (socket) => {
+    if (
+      !summary.steps.some((s) => s.name === "register") &&
+      new URL(socket.url()).pathname === "/ws"
+    )
+      anonymousTraffic.push("/ws");
   });
   await step("login-page", async () => {
     await page.goto(base);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
   });
+  assert.deepEqual(anonymousTraffic, [], "Authenticated traffic before MAX login");
+  page.off("request", recordAnonymous);
   await step("register", async () => {
     await page.getByRole("button", { name: "NEED AN ACCOUNT? CREATE ONE" }).click();
     await page.getByLabel("EMAIL", { exact: true }).fill("owner@example.com");
@@ -399,8 +550,13 @@ try {
     await home();
   });
   await step("logout-after-register", async () => {
-    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    loggingOut = true;
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "networkidle" }),
+      page.getByRole("button", { name: "Sign out", exact: true }).click(),
+    ]);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    loggingOut = false;
   });
   await step("login-and-bootstrap", async () => {
     await page.getByLabel("EMAIL", { exact: true }).fill("owner@example.com");
@@ -413,11 +569,41 @@ try {
     await expect(page.getByPlaceholder("Search models...")).toBeVisible();
   });
   await step("two-contenders", async () => {
-    const options = page.getByRole("option");
+    const options = page.getByRole("option").filter({ visible: true });
     await expect(options.first()).toBeVisible();
     assert((await options.count()) >= 2, "Need two real model options");
-    await options.nth(0).click();
-    await options.nth(1).click();
+    const candidates = [...providerEvidence.values()]
+      .flatMap(({ provider }) =>
+        provider.models
+          .filter((m) => /haiku|gpt-6-luna/i.test(m.slug))
+          .map((m) => ({ provider, model: m })),
+      )
+      .filter(({ provider }) => provider.status === "ready");
+    candidates.sort(
+      (a, b) =>
+        Number(!/claude-haiku-5-5|gpt-6-luna/.test(a.model.slug)) -
+        Number(!/claude-haiku-5-5|gpt-6-luna/.test(b.model.slug)),
+    );
+    const selected = candidates
+      .filter(
+        (c, i, all) =>
+          all.findIndex(
+            (x) => x.provider.instanceId === c.provider.instanceId && x.model.slug === c.model.slug,
+          ) === i,
+      )
+      .slice(0, 2);
+    assert.equal(selected.length, 2, "Need two cheap ready engine models (Haiku or GPT-6 Luna)");
+    summary.models = selected.map(({ provider, model }) => ({
+      instanceId: provider.instanceId,
+      model: model.slug,
+      name: model.name,
+    }));
+    for (const { provider, model } of selected) {
+      await page.getByPlaceholder("Search models...").fill("");
+      await page.locator('[data-model-picker-provider="' + provider.instanceId + '"]').click();
+      await page.getByPlaceholder("Search models...").fill(model.name);
+      await page.getByRole("option").filter({ visible: true }).first().click();
+    }
     await page.keyboard.press("Escape");
     await expect(
       page.getByRole("list", { name: "Contenders", exact: true }).getByRole("listitem"),
@@ -425,9 +611,53 @@ try {
   });
   await step("synthesizer", async () => {
     await page.getByRole("button", { name: "Choose synthesizer model", exact: true }).click();
-    await page.getByRole("option").first().click();
+    const selected = summary.models[0];
+    await page.locator('[data-model-picker-provider="' + selected.instanceId + '"]').click();
+    await page.getByPlaceholder("Search models...").fill(selected.name);
+    await page.getByRole("option").filter({ visible: true }).first().click();
     await expect(page.getByText(/^Synthesizer:/)).toBeVisible();
+    summary.synthesizerDisplayName = (await page.getByText(/^Synthesizer:/).textContent())
+      .replace(/^Synthesizer:\s*/, "")
+      .trim();
   });
+  await step("low-effort", async () => {
+    const scopes = [
+      ...(await page
+        .getByRole("list", { name: "Contenders", exact: true })
+        .getByRole("listitem")
+        .all()),
+      page.locator(".max-council-models > div").filter({
+        has: page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
+      }),
+    ];
+    for (const scope of scopes) {
+      const traits = scope
+        .getByRole("button")
+        .filter({ hasText: /Low|Medium|High|Default|Effort/i });
+      if (!(await traits.count())) continue;
+      await traits.first().click();
+      const low = page.getByRole("menuitemradio").filter({ hasText: /^Low/ }).first();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await low.click();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+    }
+  });
+  await step("traits-menu", async () => {
+    const traits = page
+      .getByRole("list", { name: "Contenders", exact: true })
+      .getByRole("button")
+      .filter({ hasText: /Low|Medium|High|Default|Effort/i })
+      .first();
+    await traits.click();
+    await expect(page.getByRole("menu")).toBeVisible();
+  });
+  await page.keyboard.press("Escape");
+  await step("manage-templates", async () => {
+    await page.getByRole("button", { name: "Manage templates", exact: true }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+  });
+  await page.keyboard.press("Escape");
   await step("provider-usage", async () => {
     await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
     const providers = page.getByRole("toolbar", { name: "Providers" }).getByRole("button");
@@ -459,11 +689,145 @@ try {
     }
     await page.keyboard.press("Escape");
   });
+  if (!process.argv.includes("--no-round")) {
+    let completed;
+    let lastRoundState;
+    await step("real-round-send", async () => {
+      // The displayed chips are the expected card titles, including the provider label.
+      summary.displayNames = await page
+        .getByRole("list", { name: "Contenders", exact: true })
+        .locator("li > span")
+        .allTextContents();
+      await page
+        .getByRole("textbox", { name: "Question for the council" })
+        .fill("Reply with exactly one word: ready");
+      const created = page.waitForResponse(
+        (res) =>
+          new URL(res.url()).pathname === "/api/council/rounds" &&
+          res.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Send to council", exact: true }).click();
+      const response = await created;
+      const { round } = await response.json();
+      roundId = round.id;
+      summary.realRounds++;
+      summary.threadsCreated = [
+        ...round.contenders.map((c) => c.threadId),
+        round.synthesis.threadId,
+      ].filter(Boolean);
+      assert.equal(response.status(), 201);
+      await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
+      await expect(
+        page.getByRole("region", { name: "Council responses" }).locator("article"),
+      ).toHaveCount(2);
+    });
+    await step("real-round-complete", async () => {
+      await expect(async () => {
+        completed = await page.evaluate(
+          async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
+          roundId,
+        );
+        const state = JSON.stringify({
+          status: completed.status,
+          contenders: completed.contenders.map((c) => c.status),
+          synthesis: completed.synthesis.status,
+        });
+        if (state !== lastRoundState) console.log("ROUND", state);
+        lastRoundState = state;
+        assert(!["failed", "cancelled"].includes(completed.status), JSON.stringify(completed));
+        assert.equal(completed.status, "complete");
+      }).toPass({ timeout: 240000, intervals: [1500] });
+      summary.threadsCreated = [
+        ...completed.contenders.map((c) => c.threadId),
+        completed.synthesis.threadId,
+      ].filter(Boolean);
+      assert.equal(completed.contenders.length, 2);
+      const cards = page.getByRole("region", { name: "Council responses" }).locator("article");
+      for (let i = 0; i < 2; i++) {
+        assert.equal(completed.contenders[i].status, "complete");
+        assert(completed.contenders[i].text.trim());
+        await expect(
+          cards.nth(i).getByRole("heading", { name: summary.displayNames[i], exact: true }),
+        ).toBeVisible();
+        await expect(cards.nth(i).locator(".max-council-status")).toHaveText("complete");
+      }
+      await cards.first().scrollIntoViewIfNeeded();
+      await gates("completed-answer-text");
+      assert.equal(completed.synthesis.status, "complete");
+      assert(completed.synthesis.text.trim());
+      const synthesis = page.getByRole("region", { name: "Council synthesis" });
+      await expect(
+        synthesis.getByRole("heading", {
+          name: "Synthesis · " + summary.synthesizerDisplayName,
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(synthesis.locator(".max-council-status")).toHaveText("complete");
+      await synthesis.scrollIntoViewIfNeeded();
+      await gates("completed-synthesis-text");
+      assert(
+        ((await synthesis.getByRole("heading", { name: "Verdict", exact: true }).count()) &&
+          (await synthesis.getByRole("heading", { name: "consensus", exact: true }).count())) ||
+          (await synthesis
+            .getByText("Couldn’t read the structured format. The full answer is below.")
+            .count()),
+        "Missing synthesis sections or parse fallback",
+      );
+    });
+    await step("continue-real-answer", async () => {
+      await page
+        .getByRole("region", { name: "Council responses" })
+        .locator("article")
+        .first()
+        .getByRole("button", { name: "Continue in Agent Mode" })
+        .click();
+      await expect(page).toHaveURL(new RegExp(completed.contenders[0].threadId));
+      await expect(
+        page
+          .locator('[data-message-role="assistant"]')
+          .filter({ hasText: completed.contenders[0].text.trim() })
+          .first(),
+      ).toBeVisible();
+    });
+    await step("return-same-round", async () => {
+      await page.getByRole("button", { name: "Back to Council" }).click();
+      await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
+    });
+    await step("reload-complete-round", async () => {
+      await reloadPage();
+      await expect(
+        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
+      ).toHaveText(["complete", "complete"]);
+      const resumed = await page.evaluate(
+        async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
+        roundId,
+      );
+      assert.deepEqual(resumed, completed);
+    });
+    await step("recent-round-reopen", async () => {
+      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await home();
+      await page.getByRole("button", { name: /Reply with exactly one word: ready/ }).click();
+      await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
+      await expect(
+        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
+      ).toHaveText(["complete", "complete"]);
+      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await home();
+    });
+  }
   await step("agent-mode", async () => {
     await page.getByRole("button", { name: "Agent", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Question for the council" })).toHaveCount(0);
   });
   await step("thread-view", async () => {
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    assert.equal(
+      await page
+        .locator("html")
+        .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
+      "#00ff41",
+    );
     // Agent landing automatically opens a local draft for the most recent project.
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
   });
@@ -472,19 +836,55 @@ try {
     await home();
   });
   await step("reload-session", async () => {
-    await page.reload();
+    await reloadPage();
     await home();
   });
+  await step("explicit-appearance-preference", async () => {
+    await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
+    await reloadPage();
+    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
+    await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
+    await reloadPage();
+    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await page.getByRole("button", { name: "Back to Council" }).click();
+    await home();
+  });
+  await step("phone-360-gates", async () => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await home();
+    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
+    await expect(page.getByPlaceholder("Search models...")).toBeVisible();
+    await gates("phone-360-picker");
+    await page.screenshot({ path: path.join(artifacts, "phone-360-picker.png"), fullPage: true });
+    await page.keyboard.press("Escape");
+  });
   await step("logout", async () => {
-    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    loggingOut = true;
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "networkidle" }),
+      page.getByRole("button", { name: "Sign out", exact: true }).click(),
+    ]);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    loggingOut = false;
   });
 } catch (error) {
   errors.push(redact(error.stack));
 } finally {
   await cleanup();
   const gateFailures = summary.gates.filter(
-    (g) => g.overflow || g.truncatedTitles || g.smallTargets.length,
+    (g) =>
+      g.overflow ||
+      g.truncatedTitles ||
+      g.smallTargets.length ||
+      g.contrast.length ||
+      g.transparentPanels.length,
   );
   // Ten >200ms tasks across cold boots and a complete walkthrough allow startup work,
   // but fail sustained main-thread stalls. Keep raw durations for comparison across machines.

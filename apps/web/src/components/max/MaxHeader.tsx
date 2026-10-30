@@ -22,9 +22,9 @@ export function MaxHeader({
   const logout = useMaxLogout();
 
   return (
-    <WorkspacePageHeader electron={isElectron} className="border-b border-(--max-line)">
+    <WorkspacePageHeader electron={isElectron} className="gap-2 border-b border-(--max-line)">
       <div className="flex min-w-0 flex-1 items-baseline gap-3">
-        <span className="max-wordmark text-lg font-bold">MAX</span>
+        <span className="max-wordmark shrink-0 text-lg font-bold">MAX</span>
         <span className="hidden truncate text-xs text-(--max-muted) sm:inline">
           Multi-Model AI Console
         </span>
@@ -45,7 +45,7 @@ export function MaxHeader({
                 if (!pressed) onModeChange(option.mode);
               }}
               className={cn(
-                "rounded-xs px-2.5 py-1 text-xs motion-safe:transition-colors",
+                "min-h-10 min-w-10 rounded-xs px-2.5 py-1 text-xs motion-safe:transition-colors",
                 pressed
                   ? "bg-(--max-darker) text-(--max-green)"
                   : "text-(--max-muted) hover:text-(--max-light)",
@@ -59,7 +59,7 @@ export function MaxHeader({
       <button
         type="button"
         onClick={() => void logout()}
-        className="flex shrink-0 items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-(--max-muted) hover:text-(--max-light) motion-safe:transition-colors"
+        className="flex min-h-10 min-w-10 shrink-0 items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-(--max-muted) hover:text-(--max-light) motion-safe:transition-colors"
       >
         <LogOutIcon aria-hidden="true" className="size-3.5" />
         <span className="max-sm:sr-only">Sign out</span>

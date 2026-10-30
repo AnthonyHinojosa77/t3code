@@ -162,7 +162,7 @@ export function MaxPromptComposer({
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-(--max-line) px-3 py-2.5">
-          <label className="text-xs">
+          <label className="flex min-w-0 flex-col gap-2 text-xs">
             Project folder
             <select
               aria-label="Project folder"
@@ -180,7 +180,7 @@ export function MaxPromptComposer({
               ))}
             </select>
           </label>
-          <div className="flex items-center gap-3">
+          <div className="flex w-full items-center justify-between gap-3">
             <p id={SEND_REASON_ID} className="text-xs text-(--max-muted)">
               {error ?? reason}
             </p>
@@ -189,7 +189,7 @@ export function MaxPromptComposer({
               disabled={reason !== null || submitting}
               onClick={() => void submit()}
               aria-describedby={SEND_REASON_ID}
-              className="max-council-button disabled:cursor-not-allowed"
+              className="max-council-button max-council-send shrink-0 disabled:cursor-not-allowed"
             >
               {submitting ? "Starting…" : "Send to council"}
             </button>
@@ -254,8 +254,9 @@ function CouncilModelControls({
     : undefined;
 
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="max-council-models mt-3 flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
+        <span className="w-full text-xs text-(--max-muted)">Contenders</span>
         <ProviderModelPicker
           environmentId={environmentId}
           activeInstanceId={firstContender?.instanceId ?? defaultSelection.instanceId}
@@ -271,35 +272,6 @@ function CouncilModelControls({
           onOpenProviderSetup={openProviderSetup}
           onInstanceModelChange={toggleContender}
         />
-        <span className="text-xs text-(--max-muted)">Synthesizer</span>
-        <ProviderModelPicker
-          environmentId={environmentId}
-          activeInstanceId={synthesizer?.instanceId ?? defaultSelection.instanceId}
-          model={synthesizer?.model ?? ""}
-          lockedProvider={null}
-          instanceEntries={entries}
-          modelOptionsByInstance={modelOptions}
-          {...(synthesizer === null ? { triggerLabel: "Choose a model" } : {})}
-          triggerAriaLabel="Choose synthesizer model"
-          onOpenProviderSetup={openProviderSetup}
-          onInstanceModelChange={(instanceId, model) =>
-            onSelectionChange((current) => setCouncilSynthesizer(current, instanceId, model))
-          }
-        />
-        {synthesizer && synthesizerEntry ? (
-          <TraitsPicker
-            provider={synthesizerEntry.driverKind}
-            instanceId={synthesizer.instanceId}
-            models={synthesizerEntry.models}
-            model={synthesizer.model}
-            modelOptions={synthesizer.options ?? []}
-            allowPromptInjectedEffort={false}
-            planModeEnabled={settings.planModeEnabled}
-            onModelOptionsChange={(options) =>
-              onSelectionChange((current) => setCouncilSynthesizerOptions(current, options))
-            }
-          />
-        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {selection.contenders.length === 0 ? (
@@ -372,6 +344,39 @@ function CouncilModelControls({
             })}
           </ul>
         )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="w-full text-xs text-(--max-muted)">Synthesizer</span>
+        <ProviderModelPicker
+          environmentId={environmentId}
+          activeInstanceId={synthesizer?.instanceId ?? defaultSelection.instanceId}
+          model={synthesizer?.model ?? ""}
+          lockedProvider={null}
+          instanceEntries={entries}
+          modelOptionsByInstance={modelOptions}
+          {...(synthesizer === null ? { triggerLabel: "Choose a model" } : {})}
+          triggerAriaLabel="Choose synthesizer model"
+          onOpenProviderSetup={openProviderSetup}
+          onInstanceModelChange={(instanceId, model) =>
+            onSelectionChange((current) => setCouncilSynthesizer(current, instanceId, model))
+          }
+        />
+        {synthesizer && synthesizerEntry ? (
+          <TraitsPicker
+            provider={synthesizerEntry.driverKind}
+            instanceId={synthesizer.instanceId}
+            models={synthesizerEntry.models}
+            model={synthesizer.model}
+            modelOptions={synthesizer.options ?? []}
+            allowPromptInjectedEffort={false}
+            planModeEnabled={settings.planModeEnabled}
+            onModelOptionsChange={(options) =>
+              onSelectionChange((current) => setCouncilSynthesizerOptions(current, options))
+            }
+          />
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
         {synthesizer ? (
           <span className="inline-flex items-center gap-1 rounded-sm border border-(--max-amber) py-0.5 pr-0.5 pl-2 text-xs text-(--max-amber)">
             Synthesizer: {describe(synthesizer)}
