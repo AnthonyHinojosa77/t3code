@@ -29,9 +29,12 @@ export interface CouncilEngine {
   launch(input: EngineLaunch): Promise<void>;
   observe(threadId: string, update: (value: EngineUpdate) => void): () => void;
   interrupt(threadId: string): Promise<void>;
+  archive(threadId: string): Promise<void>;
+  unarchive(threadId: string): Promise<void>;
   close(): void;
 }
 interface Projection {
+  thread?: { archivedAt?: string | null };
   messages: { role: string; text: string }[];
   runs: { status: string; failure?: { message?: string } | null }[];
   runtimeRequests: { status: string }[];
@@ -203,11 +206,26 @@ export class EngineClient implements CouncilEngine {
     });
   }
   async archive(threadId: string) {
-    await this.rpc("orchestration.dispatchCommand", {
-      type: "thread.archive",
-      commandId: NodeCrypto.randomUUID(),
-      threadId,
-    });
+    await this.setArchived(threadId, true);
+  }
+  async unarchive(threadId: string) {
+    await this.setArchived(threadId, false);
+  }
+  private async setArchived(threadId: string, archived: boolean) {
+    try {
+      await this.rpc("orchestration.dispatchCommand", {
+        type: archived ? "thread.archive" : "thread.unarchive",
+        commandId: NodeCrypto.randomUUID(),
+        threadId,
+      });
+    } catch (error) {
+      if (!(error instanceof EngineRpcRejected)) throw error;
+      // RPC errors hide engine details; verify the desired state instead of matching error text.
+      const projection = await this.rpc<Projection>("orchestration.getThreadProjection", {
+        threadId,
+      });
+      if (!projection.thread || Boolean(projection.thread.archivedAt) !== archived) throw error;
+    }
   }
   close() {
     this.stopped = true;

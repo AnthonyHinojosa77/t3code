@@ -1,3 +1,4 @@
+// @effect-diagnostics globalConsole:off - Standalone companion logs sanitized cleanup failures.
 // @effect-diagnostics nodeBuiltinImport:off - The companion is a standalone Node process with a small import graph.
 // @effect-diagnostics globalTimers:off - Companion lifecycle and transport use native timers.
 // @effect-diagnostics globalDate:off - Persisted lifecycle timestamps use ISO wall-clock time.
@@ -81,6 +82,7 @@ export class CouncilCoordinator {
   private active = new Map<string, CouncilRound>();
   private cleanup = new Map<string, () => void>();
   private stopped = false;
+  private lifecycle = new Map<string, Promise<void>>();
   readonly store: CouncilStore;
   readonly templates: RoleTemplates;
   private readonly engine: CouncilEngine;
@@ -98,10 +100,60 @@ export class CouncilCoordinator {
   }
   resume() {
     for (const r of this.store.all())
-      if (!terminal(r.status)) {
+      if (terminal(r.status)) {
+        for (const state of [...r.contenders, r.synthesis]) this.archive(r, state);
+      } else {
         this.active.set(r.id, r);
         this.run(r);
       }
+  }
+  private serialize(threadId: string, action: () => Promise<void>) {
+    const previous = this.lifecycle.get(threadId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(action);
+    this.lifecycle.set(threadId, next);
+    void next
+      .finally(() => {
+        if (this.lifecycle.get(threadId) === next) this.lifecycle.delete(threadId);
+      })
+      .catch(() => {});
+    return next;
+  }
+  private archive(r: CouncilRound, state: CouncilContenderState | CouncilSynthesisState) {
+    const threadId = state.threadId;
+    if (!threadId || !terminal(state.status) || state.archivedAt || state.continuedAt) return;
+    void this.serialize(threadId, async () => {
+      if (this.stopped) return;
+      const current = this.active.get(r.id) ?? this.store.get(r.id);
+      const target = [...current.contenders, current.synthesis].find(
+        (s) => s.threadId === threadId,
+      )!;
+      if (target.archivedAt || target.continuedAt) return;
+      await this.engine.archive(threadId);
+      if (this.stopped) return;
+      const latest = this.active.get(r.id) ?? this.store.get(r.id);
+      const archived = [...latest.contenders, latest.synthesis].find(
+        (s) => s.threadId === threadId,
+      )!;
+      archived.archivedAt = new Date().toISOString();
+      this.save(latest);
+    }).catch(() => {
+      console.warn("Council thread archive failed; will retry on companion start", threadId);
+    });
+  }
+  async continueThread(id: string, threadId: string) {
+    const round = this.active.get(id) ?? this.store.get(id);
+    if (![...round.contenders, round.synthesis].some((s) => s.threadId === threadId))
+      throw new CouncilError(404, "Thread not found in round");
+    await this.serialize(threadId, async () => {
+      await this.engine.unarchive(threadId);
+      const current = this.active.get(id) ?? this.store.get(id);
+      const target = [...current.contenders, current.synthesis].find(
+        (s) => s.threadId === threadId,
+      )!;
+      target.continuedAt = new Date().toISOString();
+      this.save(current);
+    });
+    return { threadId };
   }
   create(value: unknown): CouncilRound {
     const v = value as CouncilRoundInput;
@@ -251,6 +303,7 @@ export class CouncilCoordinator {
         }
       }
       this.save(r);
+      if (terminal(state.status)) this.archive(r, state);
       if (!synthesis && terminal(state.status)) this.run(r);
     };
     const remaining = Math.max(0, this.timeoutMs - (Date.now() - Date.parse(state.startedAt)));
@@ -269,7 +322,10 @@ export class CouncilCoordinator {
       return;
     }
     const attach = () => {
-      if (!disposed) stopObserve = this.engine.observe(state.threadId!, finish);
+      if (!disposed) {
+        stopObserve = this.engine.observe(state.threadId!, finish);
+        if (disposed) stopObserve();
+      }
     };
     void this.engine
       .launch({
@@ -311,6 +367,7 @@ export class CouncilCoordinator {
         this.cleanup.delete(key);
       }
     this.save(r);
+    for (const state of [...r.contenders, r.synthesis]) this.archive(r, state);
     return this.store.get(id);
   }
   close() {

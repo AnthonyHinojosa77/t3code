@@ -151,8 +151,11 @@ it("resumes, polls through synthesis, stops at completion and returns from Agent
     fullPage: false,
     path: "__screenshots__/B/round-complete-meta-debate.png",
   });
+  fetch.mockImplementation(async () => new Response(JSON.stringify({ threadId: "thread-1" })));
   await screen.getByRole("button", { name: "Continue in Agent Mode" }).first().click();
-  expect(screen.router?.state.location.pathname).toBe("/environment-1/thread-1");
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/environment-1/thread-1"),
+  );
   await screen.rerender(<MaxCouncilReturn />);
   await screen.getByRole("button", { name: "Back to Council" }).click();
   expect(screen.router?.state.location.search).toEqual({ round: "round-1" });
@@ -368,4 +371,20 @@ it("shows approvals still required and removes the note for auto mode", async ()
     .element(screen.getByText("This model may ask for tool approvals."))
     .not.toBeInTheDocument();
   await page.screenshot({ fullPage: false, path: "__screenshots__/F1/auto-mode-no-note.png" });
+});
+
+it("keeps the round open and displays a restore failure", async () => {
+  await phone();
+  const { round } = councilFixture();
+  using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) =>
+    init?.method === "POST"
+      ? new Response(JSON.stringify({ error: "Could not restore council thread" }), {
+          status: 502,
+        })
+      : new Response(JSON.stringify({ round })),
+  );
+  await using screen = await render(wrapped("round-1"), { router: "/?round=round-1" });
+  await screen.getByRole("button", { name: "Continue in Agent Mode" }).first().click();
+  await expect.element(screen.getByText("Could not restore council thread")).toBeVisible();
+  expect(screen.router?.state.location.pathname).toBe("/");
 });

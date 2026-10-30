@@ -11,6 +11,14 @@ export class FakeEngine implements CouncilEngine {
   launches: EngineLaunch[] = [];
   callbacks = new Map<string, (u: EngineUpdate) => void>();
   interrupts: string[] = [];
+  archives: string[] = [];
+  unarchives: string[] = [];
+  async archive(id: string) {
+    this.archives.push(id);
+  }
+  async unarchive(id: string) {
+    this.unarchives.push(id);
+  }
   async launch(i: EngineLaunch) {
     this.launches.push(i);
     i.onRuntimeMode?.("auto");

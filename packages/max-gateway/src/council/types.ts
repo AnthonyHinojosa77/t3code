@@ -50,6 +50,8 @@ export interface CouncilContenderState extends CouncilModelInput {
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  archivedAt?: string | null;
+  continuedAt?: string | null;
 }
 export interface CouncilStructuredSynthesis {
   consensus: string[];
@@ -68,6 +70,8 @@ export interface CouncilSynthesisState extends CouncilModelInput {
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  archivedAt?: string | null;
+  continuedAt?: string | null;
 }
 export interface CouncilRound {
   id: string;
