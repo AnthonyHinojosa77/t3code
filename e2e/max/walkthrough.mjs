@@ -67,12 +67,16 @@ const summary = {
   realRounds: 0,
   cleanup: {},
   cancelledAtLogout: [],
+  cancelledAtReload: [],
 };
 const errors = [],
   network = [],
   consoleLog = [],
   children = new Set();
 let loggingOut = false;
+let reloading = false;
+const activeRequests = new Set();
+const requestsBeforeReload = new WeakSet();
 const startedDuringLogout = new WeakSet();
 const providerEvidence = new Map();
 function collectProviders(value) {
@@ -312,6 +316,18 @@ async function step(name, fn) {
     if (page && !page.isClosed()) await page.screenshot({ path: row.screenshot, fullPage: true });
   }
 }
+async function reloadPage() {
+  await page.waitForLoadState("networkidle");
+  for (const request of activeRequests) requestsBeforeReload.add(request);
+  reloading = true;
+  try {
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+  } finally {
+    reloading = false;
+  }
+}
+
 async function home() {
   await expect(page.getByText("MAX", { exact: true }).first()).toBeVisible({ timeout: 60000 });
   await expect(page.getByRole("textbox", { name: "Question for the council" })).toBeVisible({
@@ -459,7 +475,9 @@ try {
     )
       network.push({ path: u.pathname, status: res.status() });
   });
+  page.on("requestfinished", (req) => activeRequests.delete(req));
   page.on("request", (req) => {
+    activeRequests.add(req);
     if (!loggingOut) return;
     startedDuringLogout.add(req);
     const url = new URL(req.url());
@@ -475,6 +493,15 @@ try {
     }
   });
   page.on("requestfailed", (req) => {
+    activeRequests.delete(req);
+    if (
+      reloading &&
+      requestsBeforeReload.has(req) &&
+      req.failure()?.errorText === "net::ERR_ABORTED"
+    ) {
+      summary.cancelledAtReload.push(new URL(req.url()).pathname);
+      return;
+    }
     if (
       loggingOut &&
       !startedDuringLogout.has(req) &&
@@ -764,8 +791,7 @@ try {
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
     });
     await step("reload-complete-round", async () => {
-      await page.waitForLoadState("networkidle");
-      await page.reload();
+      await reloadPage();
       await expect(
         page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
       ).toHaveText(["complete", "complete"]);
@@ -807,21 +833,18 @@ try {
     await home();
   });
   await step("reload-session", async () => {
-    await page.waitForLoadState("networkidle");
-    await page.reload();
+    await reloadPage();
     await home();
   });
   await step("explicit-appearance-preference", async () => {
     await page.getByRole("button", { name: "Agent", exact: true }).click();
     await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
-    await page.waitForLoadState("networkidle");
-    await page.reload();
+    await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator("html")).not.toHaveClass(/dark/);
     await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
     await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
-    await page.waitForLoadState("networkidle");
-    await page.reload();
+    await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await page.getByRole("button", { name: "Back to Council" }).click();
