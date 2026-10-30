@@ -1590,22 +1590,18 @@ try {
       const renderedAnswer = await frontPage().locator(".max-council-answer").innerText();
       await frontPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
       await expect(page).toHaveURL(new RegExp(frontContender.threadId));
-      await expect(
-        page
-          .locator('[data-message-role="assistant"]')
-          // Rendered text and DOM text differ only in whitespace around blocks and link chips.
-          .filter({
-            hasText: new RegExp(
-              renderedAnswer
-                .trim()
-                .split(/\s+/)
-                .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-                .join("\\s*"),
-              "i",
-            ),
-          })
-          .first(),
-      ).toBeVisible();
+      // A turn can span several assistant messages, and block and link-chip whitespace differs
+      // between the two views, so compare the whole answer with whitespace removed.
+      const compact = (text) => text.replace(/\s+/g, "");
+      const expectedAnswer = compact(renderedAnswer);
+      assert(expectedAnswer, "The front page rendered no answer");
+      await expect
+        .poll(async () =>
+          compact(
+            (await page.locator('[data-message-role="assistant"]').allInnerTexts()).join(""),
+          ).includes(expectedAnswer),
+        )
+        .toBe(true);
     });
     await step("restored-thread-replies", async () => {
       const threadId = completed.contenders[0].threadId;
