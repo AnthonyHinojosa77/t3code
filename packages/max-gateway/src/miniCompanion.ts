@@ -26,6 +26,12 @@ import {
   type WsOpenFrame,
 } from "./protocol.ts";
 
+import { CouncilStore } from "./council/councilStore.ts";
+import { RoleTemplates } from "./council/roleTemplates.ts";
+import { EngineClient } from "./council/engineClient.ts";
+import { CouncilCoordinator } from "./council/councilCoordinator.ts";
+import { councilRoute, COUNCIL_BODY_LIMIT } from "./council/councilRoutes.ts";
+
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -63,6 +69,7 @@ export interface MiniCompanionOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly reconnect?: boolean;
   readonly token?: BearerTokenOptions;
+  readonly council?: CouncilCoordinator;
 }
 
 export interface RunningMiniCompanion {
@@ -88,7 +95,13 @@ interface LiveWs {
   open: boolean;
 }
 
-type LiveStream = LiveHttp | LiveWs;
+interface LiveCouncil {
+  readonly kind: "council";
+  readonly request: HttpRequestFrame;
+  readonly chunks: Buffer[];
+  size: number;
+}
+type LiveStream = LiveHttp | LiveWs | LiveCouncil;
 
 function asBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -152,6 +165,23 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
   const wsBase = options.upstreamWsBase ?? process.env.T3_UPSTREAM_WS ?? DEFAULT_WS;
   const tokens = new BearerTokenSource(options.token);
   tokens.startRenewalLoop();
+  let ownedStore: CouncilStore | undefined;
+  let council = options.council;
+  const getCouncil = () => {
+    if (!council) {
+      const env = options.env ?? process.env;
+      ownedStore = new CouncilStore(env.MAX_COUNCIL_DB);
+      council = new CouncilCoordinator(
+        ownedStore,
+        new RoleTemplates(env.MAX_TEMPLATES_DIR),
+        new EngineClient(tokens, wsBase),
+        Number(env.MAX_COUNCIL_CONTENDER_TIMEOUT_MS ?? 900000),
+      );
+      council.resume();
+    }
+    return council;
+  };
+  getCouncil();
   const streams = new Map<number, LiveStream>();
   let stopped = false;
   let generation = 0;
@@ -179,7 +209,7 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
     if (!stream) return;
     streams.delete(streamId);
     if (stream.kind === "http") stream.req?.destroy();
-    else stream.socket?.close(1011, "tunnel closed");
+    else if (stream.kind === "ws") stream.socket?.close(1011, "tunnel closed");
   }
 
   function failAllStreams(): void {
@@ -202,11 +232,24 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
       return;
     }
     if (frame.type === FrameType.httpRequest) {
-      openHttp(frame.streamId, parseJsonPayload<HttpRequestFrame>(frame.payload));
+      const request = parseJsonPayload<HttpRequestFrame>(frame.payload);
+      if (new URL(request.path, "http://localhost").pathname.startsWith("/api/council")) {
+        streams.set(frame.streamId, { kind: "council", request, chunks: [], size: 0 });
+      } else openHttp(frame.streamId, request);
       return;
     }
     if (frame.type === FrameType.httpRequestChunk) {
       const stream = streams.get(frame.streamId);
+      if (stream?.kind === "council") {
+        stream.size += frame.payload.length;
+        if (stream.size > COUNCIL_BODY_LIMIT) {
+          replyCouncil(frame.streamId, {
+            status: 400,
+            body: { error: "Request body exceeds 256 KB" },
+          });
+        } else stream.chunks.push(frame.payload);
+        return;
+      }
       if (stream?.kind !== "http") return;
       if (stream.req) stream.req.write(frame.payload);
       else stream.chunks.push(frame.payload);
@@ -214,6 +257,20 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
     }
     if (frame.type === FrameType.httpRequestEnd) {
       const stream = streams.get(frame.streamId);
+      if (stream?.kind === "council") {
+        replyCouncil(
+          frame.streamId,
+          isAnonymousRequest(stream.request.headers)
+            ? { status: 401, body: { error: "Owner authentication required" } }
+            : councilRoute(
+                getCouncil(),
+                stream.request.method,
+                stream.request.path,
+                Buffer.concat(stream.chunks),
+              ),
+        );
+        return;
+      }
       if (stream?.kind !== "http" || stream.ended) return;
       stream.ended = true;
       stream.req?.end();
@@ -244,6 +301,21 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
       streams.delete(frame.streamId);
       if (stream?.kind === "ws") stream.socket?.close(sendableCloseCode(close.code), close.reason);
     }
+  }
+
+  function replyCouncil(streamId: number, result: { status: number; body?: unknown }) {
+    streams.delete(streamId);
+    send(
+      streamId,
+      FrameType.httpResponseHead,
+      jsonBuffer({
+        status: result.status,
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      }),
+    );
+    if (result.body !== undefined)
+      send(streamId, FrameType.httpResponseChunk, jsonBuffer(result.body));
+    send(streamId, FrameType.httpResponseEnd, Buffer.alloc(0));
   }
 
   function openHttp(streamId: number, request: HttpRequestFrame): void {
@@ -443,6 +515,8 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
       stopped = true;
       generation += 1;
       tokens.stop();
+      council?.close();
+      ownedStore?.close();
       if (heartbeat) clearInterval(heartbeat);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       failAllStreams();
