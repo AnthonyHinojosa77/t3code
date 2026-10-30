@@ -43,7 +43,7 @@ const HOP_BY_HOP = new Set([
 const IDLE_TIMEOUT_MS = 60_000;
 const UPGRADE_TIMEOUT_MS = 15_000;
 
-export type GatewayPathKind = "health" | "tunnel" | "owned" | "proxy";
+export type GatewayPathKind = "health" | "version" | "tunnel" | "owned" | "proxy";
 
 /**
  * `owned` paths are answered by the gateway; `proxy` paths go to the Mini behind the owner
@@ -52,6 +52,7 @@ export type GatewayPathKind = "health" | "tunnel" | "owned" | "proxy";
  */
 export function classifyPath(pathname: string, method = "GET"): GatewayPathKind {
   if (pathname === "/__max/health") return "health";
+  if (pathname === "/__max/version") return "version";
   if (pathname === "/__max/tunnel") return "tunnel";
   if (
     pathname === "/__max" ||
@@ -98,6 +99,8 @@ export interface TunnelServerOptions {
    * Tests pass a plain object so they do not edit the process environment.
    */
   readonly cookieEnv?: NodeJS.ProcessEnv;
+  /** Deployment identity; null for an unlabelled local build. */
+  readonly commit?: string | null;
 }
 
 export interface RunningTunnelServer {
@@ -408,9 +411,9 @@ export async function startTunnelServer(
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const kind = classifyPath(url.pathname, req.method ?? "GET");
-    if (kind === "health") {
+    if (kind === "health" || kind === "version") {
       req.resume();
-      const body = '{"ok":true}\n';
+      const body = `${JSON.stringify(kind === "health" ? { ok: true } : { commit: options.commit ?? null })}\n`;
       res.writeHead(200, {
         "content-type": "application/json",
         "content-length": Buffer.byteLength(body),
@@ -608,6 +611,8 @@ export async function startTunnelServer(
   }
 
   httpServer.on("upgrade", (req, socket, head) => {
+    // An anonymous client may reset after rejection; its socket must not crash the gateway.
+    socket.on("error", () => socket.destroy());
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (classifyPath(url.pathname) === "tunnel") {
       acceptTunnel(req, socket, head);

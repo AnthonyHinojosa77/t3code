@@ -35,6 +35,7 @@ export async function main(): Promise<void> {
     port,
     tunnelSecret,
     authStore,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
     personalMode: isPersonalMode(),
     ownerEmail: readOwnerEmail(),
     webDist: resolveWebDist(),
