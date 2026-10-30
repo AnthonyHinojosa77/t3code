@@ -305,6 +305,11 @@ for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => {
     void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
   });
+// A rejected promise nobody awaited must still stop the processes this run owns.
+process.on("unhandledRejection", (reason) => {
+  errors.push("Unhandled rejection: " + redact(reason instanceof Error ? reason.stack : reason));
+  void cleanup().finally(() => process.exit(1));
+});
 function safeUrl(url) {
   const u = new URL(url);
   return u.origin + u.pathname;
@@ -1032,6 +1037,10 @@ try {
     await expectPosition("1 of 4");
     assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
     assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[0]);
+    // The models chosen before the reload are still chosen.
+    await expect(page.getByRole("button", { name: "Choose models", exact: true })).toHaveText(
+      /2 models · judge set/,
+    );
   });
   await step("new-chat-from-panel", async () => {
     await openPanel();
@@ -1072,13 +1081,26 @@ try {
         ),
       });
       await expect(page.getByRole("list", { name: "Attached files" })).toContainText("dot.png");
-      const created = page.waitForResponse(
-        (res) =>
-          new URL(res.url()).pathname === "/api/council/rounds" &&
-          res.request().method() === "POST",
-      );
+      // Files upload first, then the round is created; a failure shows in the composer's own line.
+      const created = page
+        .waitForResponse(
+          (res) =>
+            new URL(res.url()).pathname === "/api/council/rounds" &&
+            res.request().method() === "POST",
+          { timeout: 60000 },
+        )
+        .catch((error) => error);
       await page.getByRole("button", { name: "Send to council", exact: true }).click();
       const response = await created;
+      if (response instanceof Error) {
+        const composerSays = await page
+          .locator("#max-council-send-reason")
+          .textContent()
+          .catch(() => null);
+        throw new Error(
+          `Round was not created: ${response.message}; composer says: ${composerSays}`,
+        );
+      }
       const { round } = await response.json();
       roundId = round.id;
       summary.realRounds++;

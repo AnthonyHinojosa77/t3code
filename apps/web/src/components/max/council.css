@@ -208,7 +208,9 @@
     padding-right: 0.25rem;
   }
   .max-scope .max-composer-field > .max-composer-input {
-    flex: 1 1 auto;
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
     order: 2;
     min-height: 40px;
     max-height: 80px;

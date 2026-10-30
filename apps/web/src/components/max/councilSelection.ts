@@ -1,5 +1,11 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  ProviderInstanceId,
+  ProviderOptionSelections,
+  type ModelSelection as ModelSelectionType,
+} from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as Schema from "effect/Schema";
 
 import { modelPickerModelKey } from "../chat/modelPickerKeys";
 
@@ -7,7 +13,7 @@ import { modelPickerModelKey } from "../chat/modelPickerKeys";
 export interface CouncilContender {
   readonly instanceId: ProviderInstanceId;
   readonly model: string;
-  readonly options?: ModelSelection["options"];
+  readonly options?: ModelSelectionType["options"];
   readonly roleId?: string | null;
 }
 
@@ -15,10 +21,26 @@ export interface CouncilSelection {
   /** In the order they were picked. */
   readonly contenders: ReadonlyArray<CouncilContender>;
   /** Any model, including one that is also a contender. Carries its own traits. */
-  readonly synthesizer: ModelSelection | null;
+  readonly synthesizer: ModelSelectionType | null;
 }
 
 export const EMPTY_COUNCIL_SELECTION: CouncilSelection = { contenders: [], synthesizer: null };
+
+export const COUNCIL_SELECTION_STORAGE_KEY = "max.council.selection";
+
+/** Stored shape of the last selection, so the models chosen once are still chosen after a reload. */
+export const CouncilSelectionSchema = Schema.Struct({
+  contenders: Schema.Array(
+    Schema.Struct({
+      instanceId: ProviderInstanceId,
+      model: Schema.String,
+      options: Schema.optionalKey(ProviderOptionSelections),
+      roleId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
+  ),
+  synthesizer: Schema.NullOr(ModelSelection),
+});
+export type StoredCouncilSelection = typeof CouncilSelectionSchema.Type;
 
 /** The model picker's own row key, so council state and picker rows agree on identity. */
 export function councilContenderKey(contender: CouncilContender): string {
@@ -83,7 +105,7 @@ export function setCouncilSynthesizer(
 
 export function setCouncilSynthesizerOptions(
   selection: CouncilSelection,
-  options: ModelSelection["options"] | undefined,
+  options: ModelSelectionType["options"] | undefined,
 ): CouncilSelection {
   const current = selection.synthesizer;
   if (current === null) return selection;

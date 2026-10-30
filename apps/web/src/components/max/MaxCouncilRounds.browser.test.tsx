@@ -1,5 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
-import { expect, it, vi } from "vite-plus/test";
+import { beforeEach, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { useState } from "react";
 import "~/index.css";
@@ -77,6 +77,11 @@ vi.mock("./councilAttachments", () => ({
       })),
     ),
 }));
+
+// The chat window remembers chosen models in localStorage; each test starts with none chosen.
+beforeEach(() => {
+  localStorage.removeItem("max.council.selection");
+});
 
 function ComposerHarness() {
   const [selection, setSelection] = useState<CouncilSelection>(EMPTY_COUNCIL_SELECTION);

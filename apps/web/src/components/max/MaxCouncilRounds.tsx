@@ -16,7 +16,13 @@ import {
   useCouncilHome,
 } from "./councilHome";
 import { answeredCount, buildCouncilPages, pageTitle, type CouncilPage } from "./councilPages";
-import { EMPTY_COUNCIL_SELECTION } from "./councilSelection";
+import {
+  COUNCIL_SELECTION_STORAGE_KEY,
+  CouncilSelectionSchema,
+  EMPTY_COUNCIL_SELECTION,
+  type CouncilSelection,
+} from "./councilSelection";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { relativeRoundTime } from "./councilTime";
 import { MaxComposer } from "./MaxComposer";
 import { MaxPage } from "./MaxPage";
@@ -30,7 +36,15 @@ function pageIds(pages: ReadonlyArray<CouncilPage>): string {
 /** The chat window: the question, then the answers as pages, with the composer docked below. */
 export function MaxCouncilRounds({ roundId }: { roundId: string | undefined }) {
   const navigate = useNavigate();
-  const [selection, setSelection] = useState(EMPTY_COUNCIL_SELECTION);
+  // The chosen models are remembered across reloads and new rounds, like any chat app's model.
+  const [storedSelection, setStoredSelection] = useLocalStorage(
+    COUNCIL_SELECTION_STORAGE_KEY,
+    EMPTY_COUNCIL_SELECTION,
+    CouncilSelectionSchema,
+  );
+  const selection: CouncilSelection = storedSelection;
+  const setSelection = (update: (current: CouncilSelection) => CouncilSelection) =>
+    setStoredSelection((current) => update(current));
   const home = useCouncilHome();
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
