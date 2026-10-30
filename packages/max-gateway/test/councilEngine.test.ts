@@ -52,7 +52,7 @@ it("uses scoped WS RPC, passes options, observes pending input, and reconnects",
     expect(auth).toBe("Bearer fixture-token");
     expect(calls.find((c) => c.tag === "orchestration.launchThread")?.payload).toMatchObject({
       projectId: "scratch",
-      runtimeMode: "approval-required",
+      runtimeMode: "auto",
       modelSelection: model,
       initialMessage: { text: "exact prompt" },
     });
@@ -79,8 +79,9 @@ it("uses scoped WS RPC, passes options, observes pending input, and reconnects",
 it.each([
   [["approval-required", "auto", "full-access"], "auto"],
   [["approval-required", "auto-accept-edits", "full-access"], "approval-required"],
-  [[], "approval-required"],
-])("selects only an advertised council-safe mode: %j", (modes, expected) => {
+  [[], "auto"],
+  [undefined, "auto"],
+])("mirrors engine runtime mode support: %j", (modes, expected) => {
   expect(councilRuntimeMode(modes)).toBe(expected);
 });
 

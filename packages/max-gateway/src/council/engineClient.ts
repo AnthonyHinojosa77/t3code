@@ -15,7 +15,7 @@ export interface EngineUpdate {
 export type CouncilRuntimeMode = "auto" | "approval-required";
 class EngineRpcRejected extends Error {}
 export function councilRuntimeMode(modes: readonly string[] = []): CouncilRuntimeMode {
-  return modes.includes("auto") ? "auto" : "approval-required";
+  return modes.length === 0 || modes.includes("auto") ? "auto" : "approval-required";
 }
 export interface EngineLaunch {
   threadId: string;

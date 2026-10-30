@@ -24,6 +24,7 @@ const { DatabaseSync } = NodeSqlite;
 import { EngineClient } from "../../packages/max-gateway/src/council/engineClient.ts";
 import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts";
 
+const researchRound = process.argv.includes("--research-round");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium, expect } = require("playwright/test");
@@ -65,6 +66,8 @@ const summary = {
   usage: [],
   threadsCreated: [],
   realRounds: 0,
+  researchRound,
+  observedRoundStates: [],
   cleanup: {},
   cancelledAtLogout: [],
   cancelledAtReload: [],
@@ -580,14 +583,27 @@ try {
     const candidates = [...providerEvidence.values()]
       .flatMap(({ provider }) =>
         provider.models
-          .filter((m) => /haiku|gpt-6-luna/i.test(m.slug))
+          .filter((m) =>
+            (researchRound
+              ? /claude-sonnet-5-5|claude-haiku-5-5|gpt-6-luna/
+              : /haiku|gpt-6-luna/i
+            ).test(m.slug),
+          )
           .map((m) => ({ provider, model: m })),
       )
       .filter(({ provider }) => provider.status === "ready");
     candidates.sort(
       (a, b) =>
-        Number(!/claude-haiku-5-5|gpt-6-luna/.test(a.model.slug)) -
-        Number(!/claude-haiku-5-5|gpt-6-luna/.test(b.model.slug)),
+        Number(
+          !(researchRound ? /claude-sonnet-5-5|gpt-6-luna/ : /claude-haiku-5-5|gpt-6-luna/).test(
+            a.model.slug,
+          ),
+        ) -
+        Number(
+          !(researchRound ? /claude-sonnet-5-5|gpt-6-luna/ : /claude-haiku-5-5|gpt-6-luna/).test(
+            b.model.slug,
+          ),
+        ),
     );
     const selected = candidates
       .filter(
@@ -616,7 +632,16 @@ try {
   });
   await step("synthesizer", async () => {
     await page.getByRole("button", { name: "Choose synthesizer model", exact: true }).click();
-    const selected = summary.models[0];
+    const selected = researchRound
+      ? [...providerEvidence.values()].flatMap(({ provider }) =>
+          provider.status === "ready"
+            ? provider.models
+                .filter((m) => m.slug === "claude-haiku-5-5")
+                .map((m) => ({ instanceId: provider.instanceId, name: m.name }))
+            : [],
+        )[0]
+      : summary.models[0];
+    assert(selected, "Need a ready Claude Haiku synthesizer");
     await page.locator('[data-model-picker-provider="' + selected.instanceId + '"]').click();
     await page.getByPlaceholder("Search models...").fill(selected.name);
     await page.getByRole("option").filter({ visible: true }).first().click();
@@ -705,7 +730,11 @@ try {
         .allTextContents();
       await page
         .getByRole("textbox", { name: "Question for the council" })
-        .fill("Reply with exactly one word: ready");
+        .fill(
+          researchRound
+            ? "Use a web search to find today’s top headline on reuters.com and reply in one sentence naming the source and linking the article."
+            : "Reply with exactly one word: ready",
+        );
       const created = page.waitForResponse(
         (res) =>
           new URL(res.url()).pathname === "/api/council/rounds" &&
@@ -737,11 +766,36 @@ try {
           contenders: completed.contenders.map((c) => c.status),
           synthesis: completed.synthesis.status,
         });
-        if (state !== lastRoundState) console.log("ROUND", state);
+        if (state !== lastRoundState) {
+          console.log("ROUND", state);
+          summary.observedRoundStates.push(JSON.parse(state));
+        }
         lastRoundState = state;
         assert(!["failed", "cancelled"].includes(completed.status), JSON.stringify(completed));
+        if (completed.contenders.some((c) => c.status === "needs-attention")) return;
         assert.equal(completed.status, "complete");
       }).toPass({ timeout: 240000, intervals: [1500] });
+      summary.researchEvidence = researchRound ? completed : undefined;
+      summary.projections = await Promise.all(
+        [...completed.contenders, completed.synthesis]
+          .filter((c) => c.threadId)
+          .map(async (c) => {
+            const projection = await engine.rpc("orchestration.getThreadProjection", {
+              threadId: c.threadId,
+            });
+            return {
+              threadId: c.threadId,
+              runtimeMode: projection.thread?.runtimeMode,
+              runs: projection.runs,
+              runtimeRequests: projection.runtimeRequests,
+              turnItems: projection.turnItems,
+            };
+          }),
+      );
+      assert(
+        !summary.observedRoundStates.some((r) => r.contenders.includes("needs-attention")),
+        "STOP: contender requested attention; see recorded projection requests",
+      );
       summary.threadsCreated = [
         ...completed.contenders.map((c) => c.threadId),
         completed.synthesis.threadId,
@@ -753,6 +807,18 @@ try {
         assert(completed.contenders[i].text.trim());
         assert(!/Mode:/i.test(completed.contenders[i].text), "Contender leaked mode boilerplate");
         assert(["auto", "approval-required"].includes(completed.contenders[i].runtimeMode));
+        if (researchRound) {
+          assert.equal(completed.contenders[i].runtimeMode, "auto");
+          const projection = summary.projections.find(
+            (p) => p.threadId === completed.contenders[i].threadId,
+          );
+          assert.equal(projection.runtimeMode, "auto");
+          assert.equal(
+            projection.runtimeRequests.length,
+            0,
+            "Research requested approval or input",
+          );
+        }
         await expect(cards.nth(i)).not.toContainText(/Mode:/i);
         await expect(
           cards.nth(i).getByRole("heading", { name: summary.displayNames[i], exact: true }),
@@ -768,6 +834,7 @@ try {
       summary.synthesisRuntimeMode = completed.synthesis.runtimeMode;
       assert.equal(completed.synthesis.status, "complete");
       assert(completed.synthesis.text.trim());
+      assert(!/Mode:/i.test(completed.synthesis.text), "Synthesis leaked mode boilerplate");
       const synthesis = page.getByRole("region", { name: "Council synthesis" });
       await expect(
         synthesis.getByRole("heading", {
@@ -788,6 +855,12 @@ try {
       );
     });
     await step("continue-real-answer", async () => {
+      const renderedAnswer = await page
+        .getByRole("region", { name: "Council responses" })
+        .locator("article")
+        .first()
+        .locator(".max-council-answer")
+        .innerText();
       await page
         .getByRole("region", { name: "Council responses" })
         .locator("article")
@@ -798,7 +871,7 @@ try {
       await expect(
         page
           .locator('[data-message-role="assistant"]')
-          .filter({ hasText: completed.contenders[0].text.trim() })
+          .filter({ hasText: renderedAnswer.trim() })
           .first(),
       ).toBeVisible();
     });
