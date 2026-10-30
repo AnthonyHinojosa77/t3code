@@ -162,6 +162,9 @@ it("archive failures leave rounds complete and retry once on restart, except con
     await restarted.continueThread(r.id, r.contenders[0]!.threadId!);
     expect(f.engine.unarchives).toEqual([r.contenders[0]!.threadId]);
     expect(f.store.get(r.id).contenders[0]?.continuedAt).toBeTruthy();
+    const continued = f.store.get(r.id);
+    continued.contenders[0]!.archivedAt = null;
+    f.store.save(continued);
     restarted.close();
     const nextEngine = new FakeEngine();
     const next = new CouncilCoordinator(f.store, f.templates, nextEngine);
