@@ -465,21 +465,17 @@ describe("max gateway tunnel", () => {
         headers: ownerHeaders(stack.otherSessionToken),
       });
       expect(council.status).toBe(401);
-      const status = await withTimeout(
-        new Promise<number>((resolve, reject) => {
-          const client = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws`, {
-            headers: ownerHeaders(stack.otherSessionToken),
-          });
-          client.once("unexpected-response", (_request, response) => {
-            resolve(response.statusCode ?? 0);
-            client.terminate();
-          });
-          client.once("open", () => reject(new Error("non-owner websocket opened")));
-          client.once("error", () => {});
-        }),
-        3_000,
-        "non-owner websocket rejected",
-      );
+      const status = await new Promise<number>((resolve, reject) => {
+        const client = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws`, {
+          headers: ownerHeaders(stack.otherSessionToken),
+        });
+        client.once("unexpected-response", (_request, response) => {
+          resolve(response.statusCode ?? 0);
+          client.terminate();
+        });
+        client.once("open", () => reject(new Error("non-owner websocket opened")));
+        client.once("error", () => {});
+      });
       expect(status).toBe(401);
       expect(stack.upstream.requests).toHaveLength(0);
       expect(stack.upstream.upgradeRequests).toHaveLength(0);
