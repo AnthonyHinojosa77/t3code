@@ -110,7 +110,6 @@ const errors = [],
 let loggingOut = false;
 let reloading = false;
 const activeRequests = new Set();
-const requestsBeforeReload = new WeakSet();
 const startedDuringLogout = new WeakSet();
 const providerEvidence = new Map();
 function collectProviders(value) {
@@ -380,7 +379,6 @@ async function step(name, fn) {
 }
 async function reloadPage() {
   await page.waitForLoadState("networkidle");
-  for (const request of activeRequests) requestsBeforeReload.add(request);
   reloading = true;
   try {
     await page.reload();
