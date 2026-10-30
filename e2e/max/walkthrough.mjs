@@ -1590,21 +1590,19 @@ try {
       const renderedAnswer = await frontPage().locator(".max-council-answer").innerText();
       await frontPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
       await expect(page).toHaveURL(new RegExp(frontContender.threadId));
-      // A turn can span several assistant messages, and block and link-chip whitespace differs
-      // between the two views, so compare the whole answer with whitespace removed.
+      // The thread folds a settled turn's earlier messages behind "Worked for...", so it shows the
+      // last message of the Council answer. Whitespace differs around blocks and link chips.
       const compact = (text) => text.replace(/\s+/g, "");
-      const expectedAnswer = compact(renderedAnswer);
-      assert(expectedAnswer, "The front page rendered no answer");
+      const councilAnswer = compact(renderedAnswer);
+      assert(councilAnswer, "The front page rendered no answer");
       await expect
-        .poll(async () =>
-          compact(
-            (
-              await page
-                .locator('[data-message-role="assistant"] [data-thread-find-text="true"]')
-                .allInnerTexts()
-            ).join(""),
-          ).includes(expectedAnswer),
-        )
+        .poll(async () => {
+          const shown = await page
+            .locator('[data-message-role="assistant"] [data-thread-find-text="true"]')
+            .allInnerTexts();
+          const last = compact(shown.at(-1) ?? "");
+          return last.length > 0 && councilAnswer.endsWith(last);
+        })
         .toBe(true);
     });
     await step("restored-thread-replies", async () => {
