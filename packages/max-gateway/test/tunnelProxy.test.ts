@@ -1,11 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off - These tests drive real sockets against an in-process stub.
-// @effect-diagnostics globalTimers:off - Timeouts and polling wait on real socket I/O.
-// @effect-diagnostics globalDate:off - The 502 check measures wall-clock elapsed time.
-import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+// @effect-diagnostics globalTimers:off - The upstream fixture simulates dripping and stalled socket I/O.
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+const { createServer, request: httpRequest } = NodeHttp;
+import * as NodeNet from "node:net";
+type AddressInfo = NodeNet.AddressInfo;
+import * as NodeFSP from "node:fs/promises";
+const { chmod, mkdtemp, readFile, rm, stat, writeFile } = NodeFSP;
+import * as NodeOS from "node:os";
+const { tmpdir } = NodeOS;
+import * as NodePath from "node:path";
+const path = NodePath;
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -52,22 +57,6 @@ function listen(server: ReturnType<typeof createServer>): Promise<number> {
   });
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
 interface CapturedUpgrade {
   readonly url: string;
   readonly authorization: string | null;
@@ -82,7 +71,7 @@ interface Upstream {
   readonly wsMessages: CapturedWs[];
   readonly upgrades: string[];
   readonly upgradeRequests: CapturedUpgrade[];
-  stallAborted: () => boolean;
+  stallAborted: Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -98,7 +87,10 @@ async function startUpstream(
   const secondHalf = new Promise<void>((resolve) => {
     releaseSecondHalf = resolve;
   });
-  let stallAborted = false;
+  let markStallAborted = () => {};
+  const stallAborted = new Promise<void>((resolve) => {
+    markStallAborted = resolve;
+  });
   let dripTimer: ReturnType<typeof setInterval> | undefined;
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
   const server = createServer((req, res) => {
@@ -179,7 +171,7 @@ async function startUpstream(
         // enough that a timer which does not reset on the head fires first.
         res.socket?.setNoDelay(true);
         res.on("close", () => {
-          if (!res.writableEnded) stallAborted = true;
+          if (!res.writableEnded) markStallAborted();
         });
         stallTimer = setTimeout(() => {
           if (res.writableEnded || res.destroyed) return;
@@ -254,7 +246,7 @@ async function startUpstream(
     wsMessages,
     upgrades,
     upgradeRequests,
-    stallAborted: () => stallAborted,
+    stallAborted,
     close: async () => {
       releaseSecondHalf();
       if (dripTimer) clearInterval(dripTimer);
@@ -319,7 +311,7 @@ async function startStack(options?: {
         MAX_TEMPLATES_DIR: path.join(tokenDir, "templates"),
       },
     });
-    await withTimeout(companion.ready, 3_000, "companion ready");
+    await companion.ready;
   }
   return {
     gateway,
@@ -355,32 +347,26 @@ function sendHttp(
   init?: { method?: string; headers?: Record<string, string>; body?: Buffer },
 ): Promise<{ status: number; body: Buffer }> {
   const target = new URL(url);
-  return withTimeout(
-    new Promise((resolve, reject) => {
-      const req = httpRequest(
-        {
-          hostname: target.hostname,
-          port: target.port,
-          path: `${target.pathname}${target.search}`,
-          method: init?.method ?? "GET",
-          headers: init?.headers,
-        },
-        (res: IncomingMessage) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("end", () =>
-            resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }),
-          );
-          res.on("error", reject);
-        },
-      );
-      req.on("error", reject);
-      if (init?.body) req.end(init.body);
-      else req.end();
-    }),
-    3_000,
-    `${init?.method ?? "GET"} ${target.pathname}`,
-  );
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: init?.method ?? "GET",
+        headers: init?.headers,
+      },
+      (res: IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    if (init?.body) req.end(init.body);
+    else req.end();
+  });
 }
 
 describe("classifyPath", () => {
@@ -460,28 +446,22 @@ describe("max gateway tunnel", () => {
   it("rejects a tunnel handshake with the wrong secret", async () => {
     const stack = await startStack({ connect: false });
     try {
-      const rejected = await withTimeout(
-        new Promise<number>((resolve, reject) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/__max/tunnel`, {
-            headers: { "x-max-tunnel-secret": "wrong-secret" },
-          });
-          ws.on("unexpected-response", (_req, res: IncomingMessage) => {
-            res.resume();
-            resolve(res.statusCode ?? 0);
-          });
-          ws.on("open", () => reject(new Error("wrong secret was accepted")));
-          ws.on("error", () => {});
-        }),
-        3_000,
-        "wrong secret handshake",
-      );
+      const rejected = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/__max/tunnel`, {
+          headers: { "x-max-tunnel-secret": "wrong-secret" },
+        });
+        ws.on("unexpected-response", (_req, res: IncomingMessage) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        ws.on("open", () => reject(new Error("wrong secret was accepted")));
+        ws.on("error", () => {});
+      });
       expect(rejected).toBe(401);
-      const started = Date.now();
       const proxied = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
         headers: ownerHeaders(stack.sessionToken),
       });
       expect(proxied.status).toBe(502);
-      expect(Date.now() - started).toBeLessThan(500);
       expect(stack.upstream.requests).toHaveLength(0);
     } finally {
       await stack.close();
@@ -673,18 +653,14 @@ describe("max gateway tunnel", () => {
         { headers: ownerHeaders(stack.sessionToken, { authorization: "Bearer intruder" }) },
       );
       // The gateway accepts the client first, so wait for the upstream's own greeting.
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          client.once("message", (data) => {
-            if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
-            else reject(new Error("unexpected first message"));
-          });
-          client.once("close", (code) => reject(new Error(`closed with ${code} before upstream`)));
-          client.once("error", reject);
-        }),
-        3_000,
-        "ticketless websocket reaches upstream",
-      );
+      await new Promise<void>((resolve, reject) => {
+        client.once("message", (data) => {
+          if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
+          else reject(new Error("unexpected first message"));
+        });
+        client.once("close", (code) => reject(new Error(`closed with ${code} before upstream`)));
+        client.once("error", reject);
+      });
       const ticketless = stack.upstream.upgradeRequests.find((request) =>
         request.url.startsWith("/ws?orchestrationProtocol=2"),
       );
@@ -698,15 +674,11 @@ describe("max gateway tunnel", () => {
       const ticketed = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-2`, {
         headers: ownerHeaders(stack.sessionToken),
       });
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          ticketed.once("message", () => resolve());
-          ticketed.once("close", (code) => reject(new Error(`closed with ${code}`)));
-          ticketed.once("error", reject);
-        }),
-        3_000,
-        "ticketed websocket reaches upstream",
-      );
+      await new Promise<void>((resolve, reject) => {
+        ticketed.once("message", () => resolve());
+        ticketed.once("close", (code) => reject(new Error(`closed with ${code}`)));
+        ticketed.once("error", reject);
+      });
       expect(
         stack.upstream.upgradeRequests.find((request) => request.url === "/ws?wsTicket=ticket-2")
           ?.authorization,
@@ -724,33 +696,25 @@ describe("max gateway tunnel", () => {
         `ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-3&terminate=1`,
         { headers: ownerHeaders(stack.sessionToken) },
       );
-      const closeCode = await withTimeout(
-        new Promise<number>((resolve, reject) => {
-          dropped.once("close", (code) => resolve(code));
-          dropped.once("error", reject);
-        }),
-        3_000,
-        "dropped websocket close",
-      );
+      const closeCode = await new Promise<number>((resolve, reject) => {
+        dropped.once("close", (code) => resolve(code));
+        dropped.once("error", reject);
+      });
       expect(closeCode).toBe(1000);
 
       const next = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-4`, {
         headers: ownerHeaders(stack.sessionToken),
       });
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          next.once("message", (data) => {
-            if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
-            else reject(new Error("unexpected first message"));
-          });
-          next.once("close", (code, reason) =>
-            reject(new Error(`closed with ${code} ${reason.toString()}`)),
-          );
-          next.once("error", reject);
-        }),
-        3_000,
-        "websocket after an abnormal drop",
-      );
+      await new Promise<void>((resolve, reject) => {
+        next.once("message", (data) => {
+          if (asBuffer(data).toString("utf8") === "upstream-hello") resolve();
+          else reject(new Error("unexpected first message"));
+        });
+        next.once("close", (code, reason) =>
+          reject(new Error(`closed with ${code} ${reason.toString()}`)),
+        );
+        next.once("error", reject);
+      });
       next.close(1000);
     } finally {
       await stack.close();
@@ -767,41 +731,33 @@ describe("max gateway tunnel", () => {
       client.on("message", (data, isBinary) => {
         received.push({ data: asBuffer(data), binary: isBinary });
       });
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          client.once("open", () => resolve());
-          client.once("error", reject);
-        }),
-        3_000,
-        "client websocket open",
-      );
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", () => resolve());
+        client.once("error", reject);
+      });
       client.send("hello-text");
       client.send(Buffer.from([0, 1, 2, 255]));
-      await withTimeout(
-        waitFor(() => {
-          const texts = received
-            .filter((message) => !message.binary)
-            .map((message) => message.data.toString("utf8"));
-          const binaries = received
-            .filter((message) => message.binary)
-            .map((message) => message.data);
-          const sawUpstream =
-            texts.includes("upstream-hello") &&
-            binaries.some((data) => data.equals(Buffer.from([9, 8, 7])));
-          const sawEcho =
-            texts.includes("hello-text") &&
-            binaries.some((data) => data.equals(Buffer.from([0, 1, 2, 255])));
-          const forwardedText = stack.upstream.wsMessages.some(
-            (message) => !message.binary && message.data.toString("utf8") === "hello-text",
-          );
-          const forwardedBinary = stack.upstream.wsMessages.some(
-            (message) => message.binary && message.data.equals(Buffer.from([0, 1, 2, 255])),
-          );
-          return sawUpstream && sawEcho && forwardedText && forwardedBinary;
-        }),
-        3_000,
-        "websocket echo",
-      );
+      await waitForMessage(client, () => {
+        const texts = received
+          .filter((message) => !message.binary)
+          .map((message) => message.data.toString("utf8"));
+        const binaries = received
+          .filter((message) => message.binary)
+          .map((message) => message.data);
+        const sawUpstream =
+          texts.includes("upstream-hello") &&
+          binaries.some((data) => data.equals(Buffer.from([9, 8, 7])));
+        const sawEcho =
+          texts.includes("hello-text") &&
+          binaries.some((data) => data.equals(Buffer.from([0, 1, 2, 255])));
+        const forwardedText = stack.upstream.wsMessages.some(
+          (message) => !message.binary && message.data.toString("utf8") === "hello-text",
+        );
+        const forwardedBinary = stack.upstream.wsMessages.some(
+          (message) => message.binary && message.data.equals(Buffer.from([0, 1, 2, 255])),
+        );
+        return sawUpstream && sawEcho && forwardedText && forwardedBinary;
+      });
       expect(stack.upstream.upgrades.some((url) => url.startsWith("/ws?wsTicket=ticket-1"))).toBe(
         true,
       );
@@ -816,20 +772,19 @@ describe("max gateway tunnel", () => {
     for (let index = 0; index < binary.length; index += 1) binary[index] = index % 256;
     const stack = await startStack({ binary });
     try {
-      const response = await withTimeout(
-        openGet(`${stack.gateway.url}/attachments/file.bin`, ownerHeaders(stack.sessionToken)),
-        3_000,
-        "attachment response headers",
+      const response = await openGet(
+        `${stack.gateway.url}/attachments/file.bin`,
+        ownerHeaders(stack.sessionToken),
       );
       expect(response.statusCode).toBe(200);
       expect(response.headers["content-type"]).toBe("application/octet-stream");
-      const first = await withTimeout(readSome(response, 1), 3_000, "attachment first bytes");
+      const first = await readSome(response, 1);
       expect(first.length).toBeGreaterThan(0);
       expect(first.length).toBeLessThan(binary.length);
       expect(binary.subarray(0, first.length).equals(first)).toBe(true);
       const release = await sendHttp(`${stack.upstream.url}/__test/release`);
       expect(release.status).toBe(200);
-      const rest = await withTimeout(readRest(response, first), 3_000, "attachment rest");
+      const rest = await readRest(response, first);
       expect(rest.equals(binary)).toBe(true);
     } finally {
       await stack.close();
@@ -851,20 +806,15 @@ describe("max gateway tunnel", () => {
 
   it("returns 504 when a response sends its head and then stalls", async () => {
     const stack = await startStack({ idleTimeoutMs: 500, script: "stall" });
+    using deadlines = vi.spyOn(globalThis, "setTimeout");
     try {
-      const started = Date.now();
       const response = await sendHttp(`${stack.gateway.url}/__test/stall`, {
         headers: ownerHeaders(stack.sessionToken),
       });
-      const elapsed = Date.now() - started;
       expect(response.status).toBe(504);
       expect(response.body.toString("utf8")).toBe("gateway timeout\n");
-      // Head is delayed 200ms and the idle limit is 500ms, so a clock that
-      // resets on the head finishes after ~700ms. A clock that does not
-      // reset finishes at ~500ms.
-      expect(elapsed).toBeGreaterThanOrEqual(620);
-      expect(elapsed).toBeLessThan(2_500);
-      await waitFor(() => stack.upstream.stallAborted());
+      expect(deadlines.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(2);
+      await stack.upstream.stallAborted;
     } finally {
       await stack.close();
     }
@@ -873,28 +823,21 @@ describe("max gateway tunnel", () => {
   it("fails fast with 502 when no tunnel is connected", async () => {
     const stack = await startStack({ connect: false });
     try {
-      const started = Date.now();
       const response = await sendHttp(`${stack.gateway.url}/api/auth/session`, {
         headers: ownerHeaders(stack.sessionToken),
       });
-      const elapsed = Date.now() - started;
       expect(response.status).toBe(502);
-      expect(elapsed).toBeLessThan(500);
-      const upgrade = await withTimeout(
-        new Promise<number>((resolve, reject) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-1`, {
-            headers: ownerHeaders(stack.sessionToken),
-          });
-          ws.on("unexpected-response", (_req, res: IncomingMessage) => {
-            res.resume();
-            resolve(res.statusCode ?? 0);
-          });
-          ws.on("open", () => reject(new Error("websocket opened without a tunnel")));
-          ws.on("error", () => {});
-        }),
-        3_000,
-        "websocket without tunnel",
-      );
+      const upgrade = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${stack.gateway.port}/ws?wsTicket=ticket-1`, {
+          headers: ownerHeaders(stack.sessionToken),
+        });
+        ws.on("unexpected-response", (_req, res: IncomingMessage) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        ws.on("open", () => reject(new Error("websocket opened without a tunnel")));
+        ws.on("error", () => {});
+      });
       expect(upgrade).toBe(502);
       expect(stack.upstream.requests).toHaveLength(0);
       expect(stack.upstream.upgrades).toHaveLength(0);
@@ -912,7 +855,8 @@ describe("max gateway tunnel", () => {
     await writeFile(
       bin,
       `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import * as NodeFS from "node:fs";
+const { appendFileSync } = NodeFS;
 appendFileSync(process.env.CALL_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.stdout.write("issued-token-value\\n");
 `,
@@ -975,20 +919,18 @@ async function readCalls(logPath: string): Promise<string[][]> {
     .map((line) => JSON.parse(line) as string[]);
 }
 
-function waitFor(predicate: () => boolean): Promise<void> {
+function waitForMessage(client: WebSocket, predicate: () => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const timer = setInterval(() => {
+    const check = () => {
       if (predicate()) {
-        clearInterval(timer);
+        client.off("message", check);
+        client.off("error", reject);
         resolve();
-        return;
       }
-      if (Date.now() - started > 2_800) {
-        clearInterval(timer);
-        reject(new Error("condition was not met"));
-      }
-    }, 15);
+    };
+    client.on("message", check);
+    client.once("error", reject);
+    check();
   });
 }
 

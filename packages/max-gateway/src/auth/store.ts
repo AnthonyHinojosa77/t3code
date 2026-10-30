@@ -1,21 +1,20 @@
 // @effect-diagnostics nodeBuiltinImport:off - The account file is a local SQLite database, not an Effect service.
 // @effect-diagnostics globalDate:off - Session expiry is wall-clock time, same as MAX's 30-day cookie.
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeCrypto from "node:crypto";
+const { createHash, randomBytes, randomUUID } = NodeCrypto;
+import * as NodeFS from "node:fs";
+const { mkdirSync } = NodeFS;
+import * as NodePath from "node:path";
+const path = NodePath;
+import * as NodeSqlite from "node:sqlite";
+const { DatabaseSync } = NodeSqlite;
 
 /** Cookie lifetime. MAX uses the same 30 days. */
 export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export const SESSION_COOKIE = "maximus_session";
 
-/**
- * Where the account database lives.
- * Railway's RAILWAY_VOLUME_MOUNT_PATH is the volume directory (for example
- * `/data`), not the file. A value that does not already end in `.sqlite`
- * gets `max.sqlite` joined onto it. Tests pass MAX_DB_PATH, or call
- * `openAuthStore` with a temp file, and must not write `/data`.
- */
+/** Railway mounts a directory (append max.sqlite), or accepts a .sqlite file.
+ * Tests pass MAX_DB_PATH or a temp path to avoid writing the deployment volume. */
 export function resolveAuthDbPath(env: NodeJS.ProcessEnv = process.env): string {
   const mount = env.RAILWAY_VOLUME_MOUNT_PATH?.trim();
   if (mount && mount.length > 0) {

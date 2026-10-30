@@ -19,6 +19,7 @@ export function MaxPricingPage() {
   const [personalMode, setPersonalMode] = useState<boolean | null>(null);
   const [plan, setPlan] = useState<PlanStatus | null>(null);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the account view with the remote session and plan.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -44,17 +45,20 @@ export function MaxPricingPage() {
   if (personalMode !== false) return null;
 
   return (
-    <section className="bg-[#0a0a0a] px-4 py-10 font-mono text-[#f5f5f5]">
+    <section className="max-scope bg-(--max-black) px-4 py-10 font-mono text-(--max-bright)">
       <div className="mx-auto max-w-3xl text-center">
         <h1 className="text-2xl font-bold tracking-widest">MAX PRICING</h1>
-        <p className="mt-2 text-xs tracking-widest text-[#737373]">
+        <p className="mt-2 text-xs tracking-widest text-(--max-muted)">
           {plan?.planName ? `Current plan: ${plan.planName}` : "Plans"}
         </p>
         <div className="mt-8 grid gap-3 sm:grid-cols-4">
           {PLAN_NAMES.map((name) => (
-            <article key={name} className="rounded border border-[#333] bg-[#111] p-4">
-              <h2 className="text-xs tracking-widest text-[#00ff41]">{name.toUpperCase()}</h2>
-              <p className="mt-2 text-[10px] tracking-wide text-[#737373]">
+            <article
+              key={name}
+              className="rounded border border-(--max-form-border) bg-(--max-panel) p-4"
+            >
+              <h2 className="text-xs tracking-widest text-(--max-green)">{name.toUpperCase()}</h2>
+              <p className="mt-2 text-3xs/normal tracking-wide text-(--max-muted)">
                 {plan?.planName === name ? "CURRENT" : "SAVED BILLING"}
               </p>
             </article>

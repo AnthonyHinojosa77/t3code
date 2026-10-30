@@ -1,9 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - Static files are read from the local web build directory.
-import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+const { existsSync, statSync } = NodeFS;
+import * as NodeFSP from "node:fs/promises";
+const { readFile } = NodeFSP;
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ServerResponse = NodeHttp.ServerResponse;
+import * as NodePath from "node:path";
+const path = NodePath;
+import * as NodeURL from "node:url";
+const { fileURLToPath } = NodeURL;
 
 /** `packages/max-gateway/src` → repo `apps/web/dist`. */
 export function defaultWebDist(): string {

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owner checks read the incoming Node request that the gateway already accepted.
-import type { IncomingMessage } from "node:http";
+import * as NodeHttp from "node:http";
+type IncomingMessage = NodeHttp.IncomingMessage;
 
 export type OwnerRequestCheck = (req: IncomingMessage) => boolean | Promise<boolean>;
 
