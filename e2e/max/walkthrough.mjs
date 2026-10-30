@@ -1197,6 +1197,17 @@ try {
               runs: projection.runs,
               runtimeRequests: projection.runtimeRequests,
               turnItems: projection.turnItems,
+              // Role and attachment metadata only: enough to prove the file reached the thread.
+              messages: (projection.messages ?? []).map((m) => ({
+                role: m.role,
+                attachments: (m.attachments ?? []).map((a) => ({
+                  type: a.type,
+                  id: a.id,
+                  name: a.name,
+                  mimeType: a.mimeType,
+                  sizeBytes: a.sizeBytes,
+                })),
+              })),
             };
           }),
       );

@@ -19,7 +19,9 @@ function postBytes(url: string, file: File, mimeType: string) {
     body: file,
     credentials: "include",
     signal: controller.signal,
-  }).then((response) => {
+  }).then(async (response) => {
+    // Read the body to the end; an unread body is cancelled and logged as an aborted request.
+    await response.arrayBuffer().catch(() => undefined);
     if (!response.ok) throw new Error(`Upload rejected (${response.status})`);
   });
   return { done, abort: () => controller.abort() };
