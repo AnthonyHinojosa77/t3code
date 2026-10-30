@@ -1,3 +1,4 @@
+import { resumeMaxSessionTransport, stopMaxSessionTransport } from "./maxSessionTransport";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   createContext,
@@ -64,6 +65,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
       setUser(null);
       return;
     }
+    resumeMaxSessionTransport();
     setUser(data.user);
     setPersonalMode(data.personalMode === true);
   });
@@ -85,9 +87,16 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   const logout = useStableCallback(async () => {
+    // Close admission and cancel requests before any asynchronous logout work.
+    await stopMaxSessionTransport();
+    const { stopClientTracing } = await import("../../observability/clientTracing");
+    await stopClientTracing();
     const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     await response.text();
-    if (!response.ok) throw new Error("Could not sign out. Try again.");
+    if (!response.ok) {
+      resumeMaxSessionTransport();
+      throw new Error("Could not sign out. Try again.");
+    }
     setUser(null);
     setEmail("");
     setPassword("");

@@ -9,6 +9,11 @@ import { isElectron } from "./env";
 import { MaxAuthGate } from "./components/max/MaxAuthGate";
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
 
+import { APP_BASE_NAME } from "./branding";
+import { installMaxSessionTransport } from "./components/max/maxSessionTransport";
+
+if (APP_BASE_NAME === "MAX") installMaxSessionTransport();
+
 const AuthenticatedApp = lazy(() => import("./MaxAuthenticatedApp"));
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;

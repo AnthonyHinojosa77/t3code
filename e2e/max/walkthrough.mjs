@@ -66,11 +66,14 @@ const summary = {
   threadsCreated: [],
   realRounds: 0,
   cleanup: {},
+  cancelledAtLogout: [],
 };
 const errors = [],
   network = [],
   consoleLog = [],
   children = new Set();
+let loggingOut = false;
+const startedDuringLogout = new WeakSet();
 const providerEvidence = new Map();
 function collectProviders(value) {
   if (!value || typeof value !== "object") return;
@@ -456,7 +459,30 @@ try {
     )
       network.push({ path: u.pathname, status: res.status() });
   });
+  page.on("request", (req) => {
+    if (!loggingOut) return;
+    startedDuringLogout.add(req);
+    const url = new URL(req.url());
+    if (
+      url.origin === base &&
+      url.pathname.startsWith("/api/") &&
+      !["/api/auth/logout", "/api/auth/me"].includes(url.pathname)
+    ) {
+      network.push({
+        path: url.pathname,
+        failure: "Authenticated request started after logout began",
+      });
+    }
+  });
   page.on("requestfailed", (req) => {
+    if (
+      loggingOut &&
+      !startedDuringLogout.has(req) &&
+      req.failure()?.errorText === "net::ERR_ABORTED"
+    ) {
+      summary.cancelledAtLogout.push(new URL(req.url()).pathname);
+      return;
+    }
     if (stopping) return; // Closing our browser intentionally aborts outstanding reads.
     if (new URL(req.url()).origin === base)
       network.push({
@@ -497,8 +523,10 @@ try {
     await home();
   });
   await step("logout-after-register", async () => {
+    loggingOut = true;
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    loggingOut = false;
   });
   await step("login-and-bootstrap", async () => {
     await page.getByLabel("EMAIL", { exact: true }).fill("owner@example.com");
@@ -809,8 +837,10 @@ try {
     await page.keyboard.press("Escape");
   });
   await step("logout", async () => {
+    loggingOut = true;
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    loggingOut = false;
   });
 } catch (error) {
   errors.push(redact(error.stack));
