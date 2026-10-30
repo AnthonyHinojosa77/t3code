@@ -684,11 +684,8 @@ try {
   });
   page.on("requestfailed", (req) => {
     activeRequests.delete(req);
-    if (
-      reloading &&
-      requestsBeforeReload.has(req) &&
-      req.failure()?.errorText === "net::ERR_ABORTED"
-    ) {
+    // A request active before, or started during, a deliberate reload is cancelled by that reload.
+    if (reloading && req.failure()?.errorText === "net::ERR_ABORTED") {
       summary.cancelledAtReload.push(new URL(req.url()).pathname);
       return;
     }
