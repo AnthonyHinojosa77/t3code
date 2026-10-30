@@ -22,30 +22,26 @@ export const useCouncilHome = create<CouncilHomeState>(() => ({
   loaded: false,
 }));
 
-let inflight: AbortController | null = null;
+let inflight: Promise<void> | null = null;
 
+/** One request at a time: the side panel and the chat window may both ask on the same tick. */
 export function refreshCouncilHome(): Promise<void> {
-  inflight?.abort();
-  const controller = new AbortController();
-  inflight = controller;
-  return Promise.all([
-    councilApi.templates(controller.signal),
-    councilApi.rounds(controller.signal),
-  ])
+  if (inflight) return inflight;
+  const request = Promise.all([councilApi.templates(), councilApi.rounds()])
     .then(([templates, rounds]) => {
-      if (controller.signal.aborted) return;
       useCouncilHome.setState({ ...templates, ...rounds, error: null, loaded: true });
     })
     .catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
       useCouncilHome.setState({
         error: cause instanceof Error ? cause.message : "Couldn’t load council",
         loaded: true,
       });
     })
     .finally(() => {
-      if (inflight === controller) inflight = null;
+      inflight = null;
     });
+  inflight = request;
+  return request;
 }
 
 export function summarizeCouncilRound(round: CouncilRound): CouncilRoundSummary {
