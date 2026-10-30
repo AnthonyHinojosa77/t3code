@@ -1,4 +1,4 @@
-import { resumeMaxSessionTransport, stopMaxSessionTransport } from "./maxSessionTransport";
+import { resumeMaxSessionTransport, stopMaxSessionServices } from "./maxSessionTransport";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   createContext,
@@ -88,9 +88,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
 
   const logout = useStableCallback(async () => {
     // Close admission and cancel requests before any asynchronous logout work.
-    await stopMaxSessionTransport();
-    const { stopClientTracing } = await import("../../observability/clientTracing");
-    await stopClientTracing();
+    await stopMaxSessionServices();
     const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     await response.text();
     if (!response.ok) {

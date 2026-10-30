@@ -44,6 +44,8 @@ export function installMaxSessionTransport(): void {
 export function resumeMaxSessionTransport(): void {
   transport?.resume();
 }
-export function stopMaxSessionTransport(): Promise<void> {
-  return transport?.stop() ?? Promise.resolve();
+export async function stopMaxSessionServices(): Promise<void> {
+  await (transport?.stop() ?? Promise.resolve());
+  const { stopClientTracing } = await import("../../observability/clientTracing");
+  await stopClientTracing();
 }
