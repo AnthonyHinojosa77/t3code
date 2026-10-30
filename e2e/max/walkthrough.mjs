@@ -1593,7 +1593,8 @@ try {
       await expect(
         page
           .locator('[data-message-role="assistant"]')
-          .filter({ hasText: renderedAnswer.trim() })
+          // Link chips render an icon and extra whitespace, so match the opening words only.
+          .filter({ hasText: renderedAnswer.trim().replace(/\s+/g, " ").slice(0, 40) })
           .first(),
       ).toBeVisible();
     });

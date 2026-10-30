@@ -58,6 +58,10 @@
   --contrast-popover-foreground: var(--max-light);
   --contrast-primary: var(--max-green);
 }
+/* T3's 64% disabled opacity lands just under MAX's 3:1 floor on T3's light surfaces. */
+:root:not(.dark) button:disabled {
+  opacity: 0.72;
+}
 :root[data-max-default-theme] {
   --primary: var(--max-green) !important;
   --primary-foreground: var(--max-black) !important;
