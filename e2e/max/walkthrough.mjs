@@ -893,7 +893,7 @@ try {
     await step("recent-round-reopen", async () => {
       await page.getByRole("button", { name: "New question", exact: true }).click();
       await home();
-      await page.getByRole("button", { name: /Reply with exactly one word: ready/ }).click();
+      await page.getByRole("button", { name: completed.prompt }).click();
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
       await expect(
         page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
