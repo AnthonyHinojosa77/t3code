@@ -1,6 +1,6 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useState,
@@ -53,7 +53,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = useStableCallback(async () => {
     const response = await fetch("/api/auth/me", { credentials: "include" });
     if (!response.ok) {
       setUser(null);
@@ -66,11 +66,13 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     }
     setUser(data.user);
     setPersonalMode(data.personalMode === true);
-  }, []);
+  });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Bootstrap the external cookie session before mounting authenticated T3.
   useEffect(() => {
     let cancelled = false;
-    refreshUser()
+    void Promise.resolve()
+      .then(refreshUser)
       .catch(() => {
         if (!cancelled) setUser(null);
       })
@@ -82,7 +84,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     };
   }, [refreshUser]);
 
-  const logout = useCallback(async () => {
+  const logout = useStableCallback(async () => {
     const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     await response.text();
     if (!response.ok) throw new Error("Could not sign out. Try again.");
@@ -95,7 +97,7 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
     setMode("login");
     // T3 resolves its own sign-in once per page load, so start over without the session.
     window.location.assign("/");
-  }, []);
+  });
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();

@@ -113,4 +113,45 @@
 .max-scope .max-council-models li {
   max-width: 100%;
   flex-wrap: wrap;
+  width: 100%;
+}
+
+.max-scope .max-council-models ul {
+  width: 100%;
+}
+.max-scope .max-council-models li > span {
+  flex: 1 1 7rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.max-scope .max-council-models li > button:last-child {
+  margin-left: auto;
+  flex: 0 0 40px;
+}
+
+.max-scope .max-council-models li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px;
+  align-items: center;
+}
+.max-scope .max-council-models li > button {
+  min-width: 0;
+}
+.max-scope .max-council-models li > button:last-child {
+  grid-column: -2;
+  grid-row: 1;
+  width: 40px;
+}
+.max-scope .max-council-models li > select {
+  grid-column: 1 / -2;
+  grid-row: 2;
+}
+@media (min-width: 600px) {
+  .max-scope .max-council-models li:has(select) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto 40px;
+  }
+  .max-scope .max-council-models li > select {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }

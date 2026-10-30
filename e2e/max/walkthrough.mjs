@@ -1,3 +1,4 @@
+import { visualGates } from "./visualGates.mjs";
 import * as NodeAssert from "node:assert/strict";
 const assert = NodeAssert.default;
 import * as NodeChildProcess from "node:child_process";
@@ -26,6 +27,27 @@ import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts"
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium, expect } = require("playwright/test");
+// By default a full acceptance run covers both OS appearances; only the dark
+// pass spends a real round. Explicit scheme flags support no-round iteration.
+if (
+  !process.argv.includes("--single-scheme") &&
+  !process.argv.includes("--light") &&
+  !process.argv.includes("--no-round")
+) {
+  for (const flags of [
+    ["--single-scheme"],
+    ["--single-scheme", "--light", "--no-round", "--skip-build"],
+  ]) {
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.url), ...process.argv.slice(2), ...flags],
+      { stdio: "inherit" },
+    );
+    const [code] = await once(child, "close");
+    if (code !== 0) process.exit(code ?? 1);
+  }
+  process.exit(0);
+}
 const dir = await mkdtemp(path.join(tmpdir(), "t3mc-e2e-"));
 const artifacts = path.join(
   root,
@@ -34,6 +56,7 @@ const artifacts = path.join(
 );
 await mkdir(artifacts, { recursive: true });
 const summary = {
+  colorScheme: process.argv.includes("--light") ? "light" : "dark",
   status: "running",
   viewport: process.argv.includes("--no-round") ? "360x780@3" : "390x844@3",
   steps: [],
@@ -228,6 +251,16 @@ function safeUrl(url) {
   return u.origin + u.pathname;
 }
 async function gates(name) {
+  // Measure settled UI, not a fade's initial transparent frame. Infinite status
+  // pulses are deliberately left running.
+  await page.evaluate(async () => {
+    await Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => {})),
+    );
+  });
   const result = await page.evaluate(() => {
     const visible = (el) =>
       el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
@@ -251,7 +284,8 @@ async function gates(name) {
         .filter((x) => x.width < 40 || x.height < 40),
     };
   });
-  summary.gates.push({ step: name, ...result });
+  const visual = await page.evaluate(visualGates);
+  summary.gates.push({ step: name, ...result, ...visual });
 }
 async function step(name, fn) {
   const row = { name, status: "running", startedAt: new Date().toISOString() };
@@ -372,6 +406,7 @@ try {
     viewport: process.argv.includes("--no-round")
       ? { width: 360, height: 780 }
       : { width: 390, height: 844 },
+    colorScheme: summary.colorScheme,
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -550,6 +585,21 @@ try {
       await expect(page.getByRole("menu")).toHaveCount(0);
     }
   });
+  await step("traits-menu", async () => {
+    const traits = page
+      .getByRole("list", { name: "Contenders", exact: true })
+      .getByRole("button")
+      .filter({ hasText: /Low|Medium|High|Default|Effort/i })
+      .first();
+    await traits.click();
+    await expect(page.getByRole("menu")).toBeVisible();
+  });
+  await page.keyboard.press("Escape");
+  await step("manage-templates", async () => {
+    await page.getByRole("button", { name: "Manage templates", exact: true }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+  });
+  await page.keyboard.press("Escape");
   await step("provider-usage", async () => {
     await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
     const providers = page.getByRole("toolbar", { name: "Providers" }).getByRole("button");
@@ -643,6 +693,8 @@ try {
         ).toBeVisible();
         await expect(cards.nth(i).locator(".max-council-status")).toHaveText("complete");
       }
+      await cards.first().scrollIntoViewIfNeeded();
+      await gates("completed-answer-text");
       assert.equal(completed.synthesis.status, "complete");
       assert(completed.synthesis.text.trim());
       const synthesis = page.getByRole("region", { name: "Council synthesis" });
@@ -653,6 +705,8 @@ try {
         }),
       ).toBeVisible();
       await expect(synthesis.locator(".max-council-status")).toHaveText("complete");
+      await synthesis.scrollIntoViewIfNeeded();
+      await gates("completed-synthesis-text");
       assert(
         ((await synthesis.getByRole("heading", { name: "Verdict", exact: true }).count()) &&
           (await synthesis.getByRole("heading", { name: "consensus", exact: true }).count())) ||
@@ -709,6 +763,13 @@ try {
     await expect(page.getByRole("textbox", { name: "Question for the council" })).toHaveCount(0);
   });
   await step("thread-view", async () => {
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    assert.equal(
+      await page
+        .locator("html")
+        .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
+      "#00ff41",
+    );
     // Agent landing automatically opens a local draft for the most recent project.
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
   });
@@ -718,6 +779,20 @@ try {
   });
   await step("reload-session", async () => {
     await page.reload();
+    await home();
+  });
+  await step("explicit-appearance-preference", async () => {
+    await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
+    await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await page.getByRole("button", { name: "Back to Council" }).click();
     await home();
   });
   await step("phone-360-gates", async () => {
@@ -738,7 +813,12 @@ try {
 } finally {
   await cleanup();
   const gateFailures = summary.gates.filter(
-    (g) => g.overflow || g.truncatedTitles || g.smallTargets.length,
+    (g) =>
+      g.overflow ||
+      g.truncatedTitles ||
+      g.smallTargets.length ||
+      g.contrast.length ||
+      g.transparentPanels.length,
   );
   // Ten >200ms tasks across cold boots and a complete walkthrough allow startup work,
   // but fail sustained main-thread stalls. Keep raw durations for comparison across machines.
