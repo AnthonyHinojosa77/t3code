@@ -841,14 +841,17 @@ try {
   });
   await step("explicit-appearance-preference", async () => {
     await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
     await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     await expect(page.locator("html")).not.toHaveClass(/dark/);
     await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
     await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
     await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     await expect(page.locator("html")).toHaveClass(/dark/);
     await page.getByRole("button", { name: "Back to Council" }).click();
     await home();
