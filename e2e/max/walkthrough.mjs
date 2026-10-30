@@ -22,9 +22,32 @@ const { fileURLToPath } = NodeURL;
 import * as NodeSqlite from "node:sqlite";
 const { DatabaseSync } = NodeSqlite;
 import { EngineClient } from "../../packages/max-gateway/src/council/engineClient.ts";
+import { CouncilStore } from "../../packages/max-gateway/src/council/councilStore.ts";
+import { RoleTemplates } from "../../packages/max-gateway/src/council/roleTemplates.ts";
 import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts";
+import { buildSeededRound, SEEDED_PAGE_TITLES } from "./seedRound.mjs";
 
 const researchRound = process.argv.includes("--research-round");
+const lightScheme = process.argv.includes("--light");
+const noRound = process.argv.includes("--no-round");
+const desktop = process.argv.includes("--desktop");
+const evidenceArg = process.argv.indexOf("--evidence");
+const evidenceDir = evidenceArg >= 0 ? path.resolve(process.argv[evidenceArg + 1]) : null;
+// Device profile: phones get touch and a 3x scale; the computer profile is a 1440x900 window with
+// a mouse, a trackpad wheel and a keyboard. Both use the same build and the same seeded round.
+const viewport = desktop
+  ? { width: 1440, height: 900 }
+  : noRound
+    ? { width: 360, height: 780 }
+    : { width: 390, height: 844 };
+const VIEWPORTS = [
+  { width: 360, height: 780 },
+  { width: 390, height: 844 },
+  { width: 430, height: 932 },
+  { width: 844, height: 390 },
+  { width: 768, height: 1024 },
+  { width: 1440, height: 900 },
+];
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium, expect } = require("playwright/test");
@@ -33,11 +56,14 @@ const { chromium, expect } = require("playwright/test");
 if (
   !process.argv.includes("--single-scheme") &&
   !process.argv.includes("--light") &&
-  !process.argv.includes("--no-round")
+  !process.argv.includes("--no-round") &&
+  !desktop
 ) {
   for (const flags of [
     ["--single-scheme"],
     ["--single-scheme", "--light", "--no-round", "--skip-build"],
+    ["--single-scheme", "--desktop", "--no-round", "--skip-build"],
+    ["--single-scheme", "--desktop", "--light", "--no-round", "--skip-build"],
   ]) {
     const child = spawn(
       process.execPath,
@@ -56,11 +82,16 @@ const artifacts = path.join(
   new Date().toISOString().replaceAll(":", "-"),
 );
 await mkdir(artifacts, { recursive: true });
+const runLabel = `${lightScheme ? "light" : "dark"}-${desktop ? "desktop" : "phone"}-${viewport.width}x${viewport.height}`;
 const summary = {
-  colorScheme: process.argv.includes("--light") ? "light" : "dark",
+  colorScheme: lightScheme ? "light" : "dark",
+  device: desktop ? "computer" : "phone",
   status: "running",
-  viewport: process.argv.includes("--no-round") ? "360x780@3" : "390x844@3",
+  viewport: `${viewport.width}x${viewport.height}@${desktop ? 2 : 3}`,
   steps: [],
+  pageTurns: [],
+  attachmentUploads: [],
+  seededRound: null,
   gates: [],
   longTasks: [],
   usage: [],
@@ -252,6 +283,24 @@ async function cleanup() {
   await rm(dir, { recursive: true, force: true });
   summary.cleanup.tempRemoved = true;
 }
+async function copyEvidence() {
+  if (!evidenceDir) return;
+  const target = path.join(evidenceDir, runLabel);
+  await rm(target, { recursive: true, force: true });
+  await mkdir(target, { recursive: true });
+  await NodeFSP.cp(artifacts, target, { recursive: true });
+  const videoDir = path.join(artifacts, "video");
+  try {
+    for (const file of await NodeFSP.readdir(videoDir))
+      await NodeFSP.rename(
+        path.join(videoDir, file),
+        path.join(target, `page-turns-${runLabel}.webm`),
+      );
+  } catch {
+    /* No video was recorded in this run. */
+  }
+  summary.evidence = target;
+}
 for (const signal of ["SIGINT", "SIGTERM"])
   process.once(signal, () => {
     void cleanup().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
@@ -271,29 +320,34 @@ async function gates(name) {
         .map((a) => a.finished.catch(() => {})),
     );
   });
-  const result = await page.evaluate(() => {
-    const visible = (el) =>
-      el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
-    const titles = [...document.querySelectorAll(".max-wordmark,h1")].filter(
-      (el) => visible(el) && el.textContent.trim() === "MAX",
-    );
-    const primary = [
-      ...document.querySelectorAll(
-        'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], .max-council-button, .max-council-models button, .max-scope select',
-      ),
-    ].filter(visible);
-    return {
-      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-      truncatedTitles: titles.filter((el) => el.scrollWidth > el.clientWidth).length,
-      smallTargets: primary
-        .map((el) => ({
-          label: el.getAttribute("aria-label") || el.textContent.trim(),
-          width: el.getBoundingClientRect().width,
-          height: el.getBoundingClientRect().height,
-        }))
-        .filter((x) => x.width < 40 || x.height < 40),
-    };
-  });
+  const result = await page.evaluate(
+    (minimumTarget) => {
+      const visible = (el) =>
+        el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+      const titles = [...document.querySelectorAll(".max-wordmark,h1")].filter(
+        (el) => visible(el) && el.textContent.trim() === "MAX",
+      );
+      const primary = [
+        ...document.querySelectorAll(
+          'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose models"], button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], button[aria-label="Send to council"], .max-button, .max-council-button, .max-icon-button:not(.max-icon-button-small), .max-model-button, .max-council-models button, .max-scope select, .max-panel-new, .max-panel-item, .max-panel-footer-button',
+        ),
+      ].filter(visible);
+      return {
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        truncatedTitles: titles.filter((el) => el.scrollWidth > el.clientWidth).length,
+        smallTargets: primary
+          .map((el) => ({
+            label: el.getAttribute("aria-label") || el.textContent.trim(),
+            width: el.getBoundingClientRect().width,
+            height: el.getBoundingClientRect().height,
+          }))
+          // Touch needs 40 CSS px; the computer profile measures T3's own 28 px header controls
+          // against a pointer-precision floor instead.
+          .filter((x) => x.width < minimumTarget || x.height < minimumTarget),
+      };
+    },
+    desktop ? 28 : 40,
+  );
   const visual = await page.evaluate(visualGates);
   summary.gates.push({ step: name, ...result, ...visual });
 }
@@ -336,17 +390,125 @@ async function home() {
   await expect(page.getByRole("textbox", { name: "Question for the council" })).toBeVisible({
     timeout: 60000,
   });
-  await expect(
-    page.getByRole("button", { name: "Choose contender models", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Council", exact: true })).toBeVisible();
-  await expect(page.getByText("Synthesizer", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose models", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send to council", exact: true })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Ask the council.", exact: true })).toBeVisible();
   await expect(
     page.getByText(/Unable to connect|Something went wrong|Connection failed/i),
   ).toHaveCount(0);
+}
+const modelWindow = () => page.getByRole("dialog", { name: "Models", exact: true });
+async function openModelWindow() {
+  if (await modelWindow().isVisible()) return;
+  await page.getByRole("button", { name: "Choose models", exact: true }).click();
+  await expect(modelWindow()).toBeVisible();
+}
+async function closeModelWindow() {
+  await modelWindow().getByRole("button", { name: "Close", exact: true }).click();
+  await expect(modelWindow()).toHaveCount(0);
+}
+const panel = () => page.getByRole("navigation", { name: "Past conversations" });
+/** Phones keep the side panel in a drawer; computers dock it. */
+async function openPanel() {
+  if (!(await panel().isVisible())) {
+    await page.getByRole("button", { name: "Toggle main sidebar" }).first().click();
+    await expect(panel()).toBeVisible();
+  }
+}
+async function closePanelIfDrawer() {
+  if (viewport.width < 768 || (await page.evaluate(() => innerWidth)) < 768) {
+    await page.keyboard.press("Escape");
+    await expect(panel()).toBeHidden();
+  }
+}
+const pages = () => page.getByRole("region", { name: "Council answers", exact: true });
+const position = () => page.locator("[data-page-position]");
+const frontPage = () => page.locator('[data-max-page][data-position="current"]');
+async function pageOrder() {
+  return page.locator("[data-max-page]").evaluateAll((els) => els.map((el) => el.dataset.pageId));
+}
+async function frontTitle() {
+  return (await frontPage().locator(".max-page-title").textContent()).trim();
+}
+let cdp;
+/** A real finger: CDP touch points through Chromium's gesture recognizer, not synthetic pointer events. */
+async function swipe(direction) {
+  // Diagnostic: which pointer events the stack actually received from the touch sequence.
+  await page.evaluate(() => {
+    const root = document.querySelector(".max-pages");
+    window.__maxPointer = { down: 0, move: 0, up: 0, cancel: 0, touchstart: 0, touchmove: 0 };
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
+      root.addEventListener(type, () => window.__maxPointer[type.slice(7)]++, { once: false });
+    for (const type of ["touchstart", "touchmove"])
+      root.addEventListener(type, () => window.__maxPointer[type]++, { passive: true });
+  });
+  const box = await pages().boundingBox();
+  const y = box.y + box.height * 0.45;
+  const from = box.x + box.width * (direction === "left" ? 0.85 : 0.15);
+  const to = box.x + box.width * (direction === "left" ? 0.15 : 0.85);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+  const steps = 14;
+  for (let i = 1; i <= steps; i++) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: from + ((to - from) * i) / steps, y }],
+    });
+    await page.waitForTimeout(12);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  summary.pointerTrace = await page.evaluate(() => window.__maxPointer);
+}
+async function dragWithMouse(direction) {
+  const box = await pages().boundingBox();
+  const y = box.y + box.height * 0.45;
+  const from = box.x + box.width * (direction === "left" ? 0.85 : 0.15);
+  const to = box.x + box.width * (direction === "left" ? 0.15 : 0.85);
+  await page.mouse.move(from, y);
+  await page.mouse.down();
+  await page.mouse.move(from + (to - from) * 0.5, y, { steps: 8 });
+  await page.mouse.move(to, y, { steps: 8 });
+  await page.mouse.up();
+}
+/** Frame times while one page turns. Long frames here are the jank the owner called "jagged". */
+async function measureTurn(name, turn) {
+  await page.evaluate(() => {
+    window.__maxFrames = [];
+    let last = performance.now();
+    const start = last;
+    const tick = (t) => {
+      window.__maxFrames.push(t - last);
+      last = t;
+      if (t - start < 900) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await turn();
+  await page.waitForTimeout(950);
+  const frames = (await page.evaluate(() => window.__maxFrames)).slice(1);
+  const sorted = [...frames].sort((a, b) => a - b);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
+  const longest = sorted.at(-1) ?? 0;
+  const over34 = frames.filter((f) => f > 34).length;
+  const row = {
+    name,
+    frames: frames.length,
+    longestMs: +longest.toFixed(1),
+    p95Ms: +p95.toFixed(1),
+    over34,
+    pass: longest <= 80 && over34 <= 2,
+  };
+  summary.pageTurns.push(row);
+  return row;
+}
+async function expectPosition(text) {
+  await expect(position()).toHaveText(text);
+}
+async function restoreScheme() {
+  // Each run keeps its own appearance from here on; a toggle test must put it back.
+  await page.evaluate(
+    (mode) => localStorage.setItem("t3code:theme-appearance-mode", mode),
+    lightScheme ? "light" : "dark",
+  );
 }
 try {
   assert(
@@ -421,6 +583,16 @@ try {
     }),
     { mode: 0o600 },
   );
+  {
+    // Saved before the companion opens the same database; closed so the WAL hands over cleanly.
+    const seededId = `seed-${randomBytes(4).toString("hex")}`;
+    const store = new CouncilStore(common.MAX_COUNCIL_DB);
+    const templates = new RoleTemplates(common.MAX_TEMPLATES_DIR);
+    const seeded = buildSeededRound(seededId, Date.now() - 10 * 60000);
+    store.save(seeded, templates.get("meta-debate"));
+    store.close();
+    summary.seededRound = { id: seededId, prompt: seeded.prompt };
+  }
   const companion = start(process.execPath, ["packages/max-gateway/src/miniCompanion.ts"], {
     ...common,
     MAX_GATEWAY_URL: base,
@@ -430,13 +602,12 @@ try {
   await ready(companion, "max companion tunnel connected");
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    viewport: process.argv.includes("--no-round")
-      ? { width: 360, height: 780 }
-      : { width: 390, height: 844 },
+    viewport,
     colorScheme: summary.colorScheme,
-    deviceScaleFactor: 3,
-    isMobile: true,
-    hasTouch: true,
+    deviceScaleFactor: desktop ? 2 : 3,
+    isMobile: !desktop,
+    hasTouch: !desktop,
+    ...(evidenceDir ? { recordVideo: { dir: path.join(artifacts, "video"), size: viewport } } : {}),
   });
   await context.exposeBinding("recordLongTask", (_source, duration) =>
     summary.longTasks.push(duration),
@@ -449,6 +620,12 @@ try {
   });
   page = await context.newPage();
   page.setDefaultTimeout(15000);
+  cdp = await context.newCDPSession(page);
+  page.on("request", (req) => {
+    const u = new URL(req.url());
+    if (u.origin === base && req.method() === "POST" && /attachment|upload/i.test(u.pathname))
+      summary.attachmentUploads.push({ path: u.pathname, step: summary.steps.at(-1)?.name });
+  });
   page.on("websocket", (socket) =>
     socket.on("framereceived", ({ payload }) => {
       try {
@@ -572,8 +749,42 @@ try {
     await page.getByRole("button", { name: "SIGN IN", exact: true }).click();
     await home();
   });
+  await step("theme-toggle-persists", async () => {
+    // Old MAX's light mode: a real light palette, remembered across reloads. A light run stays
+    // light for every later gate; a dark run toggles there and back.
+    const toggle = (name) => page.getByRole("button", { name, exact: true }).first();
+    await toggle("Switch to light mode").click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(toggle("Switch to dark mode")).toBeVisible();
+    await reloadPage();
+    await home();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    assert.equal(
+      await page.locator(".max-window").evaluate((el) => getComputedStyle(el).backgroundColor),
+      "rgb(192, 192, 192)",
+      "Light mode must render old MAX's chrome-gray surface",
+    );
+    await gates("light-home");
+    await page.screenshot({ path: path.join(artifacts, "theme-light-home.png"), fullPage: true });
+    if (!lightScheme) {
+      await toggle("Switch to dark mode").click();
+      await expect(page.locator("html")).toHaveClass(/dark/);
+      await reloadPage();
+      await home();
+      await expect(page.locator("html")).toHaveClass(/dark/);
+    }
+  });
+  await step("model-window", async () => {
+    await openModelWindow();
+    await expect(modelWindow().getByRole("heading", { name: "Contenders" })).toBeVisible();
+    await expect(modelWindow().getByRole("heading", { name: "Synthesizer" })).toBeVisible();
+    await expect(modelWindow().getByLabel("Project folder")).toBeVisible();
+    await expect(modelWindow().getByLabel("Template")).toBeVisible();
+  });
   await step("contender-picker", async () => {
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
+    await modelWindow()
+      .getByRole("button", { name: "Choose contender models", exact: true })
+      .click();
     await expect(page.getByPlaceholder("Search models...")).toBeVisible();
   });
   await step("two-contenders", async () => {
@@ -631,7 +842,9 @@ try {
     ).toHaveCount(2);
   });
   await step("synthesizer", async () => {
-    await page.getByRole("button", { name: "Choose synthesizer model", exact: true }).click();
+    await modelWindow()
+      .getByRole("button", { name: "Choose synthesizer model", exact: true })
+      .click();
     const selected = researchRound
       ? [...providerEvidence.values()].flatMap(({ provider }) =>
           provider.status === "ready"
@@ -651,14 +864,17 @@ try {
       .trim();
   });
   await step("low-effort", async () => {
+    await openModelWindow();
     const scopes = [
       ...(await page
         .getByRole("list", { name: "Contenders", exact: true })
         .getByRole("listitem")
         .all()),
-      page.locator(".max-council-models > div").filter({
-        has: page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
-      }),
+      modelWindow()
+        .locator("section")
+        .filter({
+          has: page.getByRole("button", { name: "Choose synthesizer model", exact: true }),
+        }),
     ];
     for (const scope of scopes) {
       const traits = scope
@@ -669,11 +885,13 @@ try {
       const low = page.getByRole("menuitemradio").filter({ hasText: /^Low/ }).first();
       await expect(page.getByRole("menu")).toBeVisible();
       await low.click();
-      await page.keyboard.press("Escape");
+      // Choosing closes the menu; an extra Escape would close the model window around it.
+      if (await page.getByRole("menu").count()) await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toHaveCount(0);
     }
   });
   await step("traits-menu", async () => {
+    await openModelWindow();
     const traits = page
       .getByRole("list", { name: "Contenders", exact: true })
       .getByRole("button")
@@ -684,12 +902,17 @@ try {
   });
   await page.keyboard.press("Escape");
   await step("manage-templates", async () => {
-    await page.getByRole("button", { name: "Manage templates", exact: true }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await openModelWindow();
+    await modelWindow().getByRole("button", { name: "Manage templates", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Manage templates" })).toBeVisible();
   });
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Manage templates" })).toHaveCount(0);
   await step("provider-usage", async () => {
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
+    await openModelWindow();
+    await modelWindow()
+      .getByRole("button", { name: "Choose contender models", exact: true })
+      .click();
     const providers = page.getByRole("toolbar", { name: "Providers" }).getByRole("button");
     assert((await providers.count()) > 0, "No providers in picker");
     for (let i = 0; i < (await providers.count()); i++) {
@@ -719,7 +942,104 @@ try {
     }
     await page.keyboard.press("Escape");
   });
-  if (!process.argv.includes("--no-round")) {
+  await step("model-window-closes", async () => {
+    await closeModelWindow();
+    await expect(page.getByRole("button", { name: "Choose models", exact: true })).toHaveText(
+      /2 models · judge set/,
+    );
+  });
+  await step("seeded-round-from-panel", async () => {
+    await openPanel();
+    await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
+    await expect(page).toHaveURL(new RegExp("[?&]round=" + summary.seededRound.id));
+    await closePanelIfDrawer();
+    await expect(pages()).toBeVisible();
+    await expectPosition("1 of 4");
+    assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[0], "First finisher must be in front");
+    await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
+    await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    await page.screenshot({ path: path.join(artifacts, "seeded-front-page.png"), fullPage: true });
+  });
+  await step(desktop ? "turn-by-mouse-drag" : "turn-by-touch", async () => {
+    const turn = desktop ? dragWithMouse : swipe;
+    const first = await measureTurn(desktop ? "mouse-drag-forward" : "touch-swipe-forward", () =>
+      turn("left"),
+    );
+    await expectPosition("2 of 4");
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[1]);
+    await measureTurn(desktop ? "mouse-drag-back" : "touch-swipe-back", () => turn("right"));
+    await expectPosition("1 of 4");
+    assert(first.frames > 20, "Frame sampler saw too few frames during the turn");
+  });
+  await step("turn-by-keyboard-to-synthesis", async () => {
+    await pages().focus();
+    await measureTurn("keyboard-forward", () => page.keyboard.press("ArrowRight"));
+    await expectPosition("2 of 4");
+    await page.keyboard.press("ArrowRight");
+    await expectPosition("3 of 4");
+    assert.equal(
+      await frontTitle(),
+      SEEDED_PAGE_TITLES[2],
+      "Failed model page sits after the answers",
+    );
+    await expect(frontPage().getByText("Provider unavailable")).toBeVisible();
+    await expect(frontPage().locator(".max-council-status")).toHaveText("failed");
+    await gates("seeded-failed-page");
+    await page.keyboard.press("ArrowRight");
+    await expectPosition("4 of 4");
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[3], "Synthesis is always the last page");
+    await expect(frontPage().getByRole("heading", { name: "Verdict", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next page" }).last()).toBeDisabled();
+    await gates("seeded-synthesis-page");
+    await page.screenshot({
+      path: path.join(artifacts, "seeded-synthesis-page.png"),
+      fullPage: true,
+    });
+    await page.keyboard.press("Home");
+    await expectPosition("1 of 4");
+  });
+  await step("turn-by-buttons-and-edge", async () => {
+    await page.getByRole("button", { name: "Next page" }).last().click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+    await page.locator(".max-page-edge").click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+  });
+  await step("page-keeps-own-scroll", async () => {
+    const body = frontPage().locator(".max-page-body");
+    await body.evaluate((el) => {
+      el.scrollTop = 120;
+    });
+    const before = await body.evaluate((el) => el.scrollTop);
+    assert(before > 0, "Seeded answer must be long enough to scroll");
+    await page.getByRole("button", { name: "Next page" }).last().click();
+    await expectPosition("2 of 4");
+    await page.getByRole("button", { name: "Previous page" }).click();
+    await expectPosition("1 of 4");
+    assert.equal(
+      await body.evaluate((el) => el.scrollTop),
+      before,
+      "Scroll position must survive a turn",
+    );
+  });
+  await step("seeded-order-after-reload", async () => {
+    await reloadPage();
+    await expect(pages()).toBeVisible();
+    await expectPosition("1 of 4");
+    assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
+    assert.equal(await frontTitle(), SEEDED_PAGE_TITLES[0]);
+  });
+  await step("new-chat-from-panel", async () => {
+    await openPanel();
+    await panel().getByRole("button", { name: "New chat", exact: true }).click();
+    await closePanelIfDrawer();
+    await home();
+  });
+  if (!noRound) {
     let completed;
     let lastRoundState;
     await step("real-round-send", async () => {
@@ -728,6 +1048,13 @@ try {
         .getByRole("list", { name: "Contenders", exact: true })
         .locator("li > span")
         .allTextContents();
+      // The chips in the model window are the expected page titles, including the provider label.
+      await openModelWindow();
+      summary.displayNames = await modelWindow()
+        .getByRole("list", { name: "Contenders", exact: true })
+        .locator("li > span")
+        .allTextContents();
+      await closeModelWindow();
       await page
         .getByRole("textbox", { name: "Question for the council" })
         .fill(
@@ -735,6 +1062,16 @@ try {
             ? "Use a web search to find today’s top headline on reuters.com and reply in one sentence naming the source and linking the article."
             : "Reply with exactly one word: ready",
         );
+      // A 1x1 PNG through the plus button: it must reach every contender through the tunnel.
+      await page.locator('input[type="file"]').setInputFiles({
+        name: "dot.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      });
+      await expect(page.getByRole("list", { name: "Attached files" })).toContainText("dot.png");
       const created = page.waitForResponse(
         (res) =>
           new URL(res.url()).pathname === "/api/council/rounds" &&
@@ -750,10 +1087,46 @@ try {
         round.synthesis.threadId,
       ].filter(Boolean);
       assert.equal(response.status(), 201);
+      const sent = JSON.parse(response.request().postData());
+      assert.equal(sent.contenders.length, 2);
+      for (const c of sent.contenders)
+        assert.equal(c.attachments?.length, 1, "Each contender gets the file");
+      assert.notEqual(
+        sent.contenders[0].attachments[0].id,
+        sent.contenders[1].attachments[0].id,
+        "Each contender needs its own pending upload",
+      );
+      assert.equal(summary.attachmentUploads.length, 2, "Two upload POSTs must cross the gateway");
+      summary.sentAttachments = sent.contenders.map((c) => c.attachments[0]);
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator("article"),
-      ).toHaveCount(2);
+      await expect(page.getByRole("list", { name: "Files sent" })).toContainText("dot.png");
+      // Before anyone finishes: the calm thinking state with live progress. A fast model can beat
+      // this check, in which case the first page is already in front.
+      const thinking = page.locator("[data-answered-count]");
+      if (await thinking.isVisible()) {
+        await expect(thinking).toHaveText(/[0-2] of 2 answered/);
+        await gates("thinking-state");
+        await page.screenshot({ path: path.join(artifacts, "thinking-state.png"), fullPage: true });
+      } else summary.thinkingStateSeen = false;
+    });
+    await step("real-round-first-finisher", async () => {
+      await expect(pages()).toBeVisible({ timeout: 240000 });
+      const order = await pageOrder();
+      const snapshot = await page.evaluate(
+        async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
+        roundId,
+      );
+      const finished = snapshot.contenders
+        .filter((c) => c.finishedAt)
+        .sort((a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt));
+      assert(finished.length >= 1, "A page appeared before any contender finished");
+      assert.equal(order[0], finished[0].key, "The first model to finish is the front page");
+      summary.firstFinisher = { key: finished[0].key, model: finished[0].model };
+      await gates("first-finisher-front");
+      await page.screenshot({
+        path: path.join(artifacts, "first-finisher-front.png"),
+        fullPage: true,
+      });
     });
     await step("real-round-complete", async () => {
       await expect(async () => {
@@ -814,17 +1187,45 @@ try {
         completed.synthesis.threadId,
       ].filter(Boolean);
       assert.equal(completed.contenders.length, 2);
-      const cards = page.getByRole("region", { name: "Council responses" }).locator("article");
+      for (const c of completed.contenders) {
+        const projection = summary.projections.find((p) => p.threadId === c.threadId);
+        const userMessage = projection.messages?.find((m) => m.role === "user");
+        assert.equal(
+          userMessage?.attachments?.length,
+          1,
+          "The engine thread must hold the attachment that crossed the tunnel",
+        );
+        assert.equal(userMessage.attachments[0].name, "dot.png");
+      }
+      summary.attachmentsOnThreads = completed.contenders.map((c) => ({
+        threadId: c.threadId,
+        attachment: summary.projections
+          .find((p) => p.threadId === c.threadId)
+          ?.messages?.find((m) => m.role === "user")?.attachments?.[0],
+      }));
+      // Pages: finish order, then the synthesis. Titles are the chips from the model window.
+      const byFinish = [...completed.contenders].sort(
+        (a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt),
+      );
+      assert.deepEqual(await pageOrder(), [...byFinish.map((c) => c.key), "synthesis"]);
+      assert.equal(
+        await pageOrder().then((o) => o[0]),
+        summary.firstFinisher.key,
+        "Order stayed stable",
+      );
+      await pages().focus();
+      await page.keyboard.press("Home");
+      await expectPosition("1 of 3");
       for (let i = 0; i < 2; i++) {
-        assert.equal(completed.contenders[i].status, "complete");
-        assert(completed.contenders[i].text.trim());
-        assert(!/Mode:/i.test(completed.contenders[i].text), "Contender leaked mode boilerplate");
-        assert(["auto", "approval-required"].includes(completed.contenders[i].runtimeMode));
+        const contender = byFinish[i];
+        const index = completed.contenders.indexOf(contender);
+        assert.equal(contender.status, "complete");
+        assert(contender.text.trim());
+        assert(!/Mode:/i.test(contender.text), "Contender leaked mode boilerplate");
+        assert(["auto", "approval-required"].includes(contender.runtimeMode));
         if (researchRound) {
-          assert.equal(completed.contenders[i].runtimeMode, "auto");
-          const projection = summary.projections.find(
-            (p) => p.threadId === completed.contenders[i].threadId,
-          );
+          assert.equal(contender.runtimeMode, "auto");
+          const projection = summary.projections.find((p) => p.threadId === contender.threadId);
           assert.equal(projection.runtimeMode, "auto");
           assert.equal(
             projection.runtimeRequests.length,
@@ -832,14 +1233,18 @@ try {
             "Research requested approval or input",
           );
         }
-        await expect(cards.nth(i)).not.toContainText(/Mode:/i);
+        await expectPosition(`${i + 1} of 3`);
+        await expect(frontPage()).not.toContainText(/Mode:/i);
         await expect(
-          cards.nth(i).getByRole("heading", { name: summary.displayNames[i], exact: true }),
+          frontPage().getByRole("heading", { name: summary.displayNames[index], exact: true }),
         ).toBeVisible();
-        await expect(cards.nth(i).locator(".max-council-status")).toHaveText("complete");
+        await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
+        await gates(`completed-answer-page-${i + 1}`);
+        if (i === 0)
+          await measureTurn("keyboard-forward-real", () => page.keyboard.press("ArrowRight"));
       }
-      await cards.first().scrollIntoViewIfNeeded();
-      await gates("completed-answer-text");
+      await page.keyboard.press("ArrowRight");
+      await expectPosition("3 of 3");
       summary.runtimeModes = completed.contenders.map((c) => ({
         threadId: c.threadId,
         runtimeMode: c.runtimeMode,
@@ -848,7 +1253,7 @@ try {
       assert.equal(completed.synthesis.status, "complete");
       assert(completed.synthesis.text.trim());
       assert(!/Mode:/i.test(completed.synthesis.text), "Synthesis leaked mode boilerplate");
-      const synthesis = page.getByRole("region", { name: "Council synthesis" });
+      const synthesis = frontPage();
       await expect(
         synthesis.getByRole("heading", {
           name: "Synthesis · " + summary.synthesizerDisplayName,
@@ -856,7 +1261,7 @@ try {
         }),
       ).toBeVisible();
       await expect(synthesis.locator(".max-council-status")).toHaveText("complete");
-      await synthesis.scrollIntoViewIfNeeded();
+      await expect(page.getByRole("button", { name: "Next page" }).last()).toBeDisabled();
       await gates("completed-synthesis-text");
       assert(
         ((await synthesis.getByRole("heading", { name: "Verdict", exact: true }).count()) &&
@@ -868,19 +1273,14 @@ try {
       );
     });
     await step("continue-real-answer", async () => {
-      const renderedAnswer = await page
-        .getByRole("region", { name: "Council responses" })
-        .locator("article")
-        .first()
-        .locator(".max-council-answer")
-        .innerText();
-      await page
-        .getByRole("region", { name: "Council responses" })
-        .locator("article")
-        .first()
-        .getByRole("button", { name: "Continue in Agent Mode" })
-        .click();
-      await expect(page).toHaveURL(new RegExp(completed.contenders[0].threadId));
+      await pages().focus();
+      await page.keyboard.press("Home");
+      await expectPosition("1 of 3");
+      const frontKey = (await pageOrder())[0];
+      const frontContender = completed.contenders.find((c) => c.key === frontKey);
+      const renderedAnswer = await frontPage().locator(".max-council-answer").innerText();
+      await frontPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
+      await expect(page).toHaveURL(new RegExp(frontContender.threadId));
       await expect(
         page
           .locator('[data-message-role="assistant"]')
@@ -925,9 +1325,10 @@ try {
     });
     await step("reload-complete-round", async () => {
       await reloadPage();
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
-      ).toHaveText(["complete", "complete"]);
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 3");
+      assert.equal((await pageOrder())[0], summary.firstFinisher.key, "Order survives a reload");
+      await expect(frontPage().locator(".max-council-status")).toHaveText("complete");
       const resumed = await page.evaluate(
         async (id) => (await (await fetch("/api/council/rounds/" + id)).json()).round,
         roundId,
@@ -935,14 +1336,19 @@ try {
       assert.deepEqual(resumed, completed);
     });
     await step("recent-round-reopen", async () => {
-      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      await closePanelIfDrawer();
       await home();
-      await page.getByRole("button", { name: completed.prompt }).click();
+      await openPanel();
+      await panel().getByRole("button", { name: completed.prompt }).click();
+      await closePanelIfDrawer();
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
-      await expect(
-        page.getByRole("region", { name: "Council responses" }).locator(".max-council-status"),
-      ).toHaveText(["complete", "complete"]);
-      await page.getByRole("button", { name: "New question", exact: true }).click();
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 3");
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      await closePanelIfDrawer();
       await home();
     });
   }
@@ -951,13 +1357,19 @@ try {
     await expect(page.getByRole("textbox", { name: "Question for the council" })).toHaveCount(0);
   });
   await step("thread-view", async () => {
-    await expect(page.locator("html")).toHaveClass(/dark/);
-    assert.equal(
-      await page
-        .locator("html")
-        .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
-      "#00ff41",
-    );
+    // Agent mode follows the chosen appearance: MAX's branded dark theme, or T3's light theme.
+    if (lightScheme) {
+      await expect(page.locator("html")).not.toHaveClass(/dark/);
+      await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
+    } else {
+      await expect(page.locator("html")).toHaveClass(/dark/);
+      assert.equal(
+        await page
+          .locator("html")
+          .evaluate((el) => getComputedStyle(el).getPropertyValue("--primary").trim()),
+        "#00ff41",
+      );
+    }
     // Agent landing automatically opens a local draft for the most recent project.
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
   });
@@ -982,18 +1394,64 @@ try {
     await reloadPage();
     await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
     await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    // With no stored preference MAX starts dark: the first-visit default.
     await expect(page.locator("html")).toHaveClass(/dark/);
+    await restoreScheme();
+    await reloadPage();
     await page.getByRole("button", { name: "Back to Council" }).click();
     await home();
   });
-  await step("phone-360-gates", async () => {
-    await page.setViewportSize({ width: 360, height: 780 });
+  await step("viewport-matrix", async () => {
+    // Layout must follow the window live: phones (and a phone held sideways) get a drawer and a
+    // full-height column; wider windows dock the panel. No reload between sizes.
+    for (const size of VIEWPORTS) {
+      const label = `${size.width}x${size.height}`;
+      await page.setViewportSize(size);
+      await home();
+      const docked = size.width >= 768;
+      if (docked) await expect(panel()).toBeVisible();
+      else await expect(panel()).toBeHidden();
+      await gates(`viewport-${label}-home`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-home.png`) });
+      await openPanel();
+      await expect(panel()).toBeVisible();
+      await gates(`viewport-${label}-panel`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-panel.png`) });
+      await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
+      if (!docked) {
+        await page.keyboard.press("Escape");
+        await expect(panel()).toBeHidden();
+      }
+      await expect(pages()).toBeVisible();
+      await expectPosition("1 of 4");
+      const composer = await page
+        .getByRole("button", { name: "Send to council", exact: true })
+        .boundingBox();
+      assert(
+        composer && composer.y + composer.height <= size.height + 1,
+        `Composer must stay inside the ${label} viewport`,
+      );
+      await gates(`viewport-${label}-pages`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-pages.png`) });
+      await openModelWindow();
+      await modelWindow()
+        .getByRole("button", { name: "Choose contender models", exact: true })
+        .click();
+      await expect(page.getByPlaceholder("Search models...")).toBeVisible();
+      await gates(`viewport-${label}-picker`);
+      await page.screenshot({ path: path.join(artifacts, `viewport-${label}-picker.png`) });
+      await page.keyboard.press("Escape");
+      await closeModelWindow();
+      await openPanel();
+      await panel().getByRole("button", { name: "New chat", exact: true }).click();
+      if (!docked) {
+        await page.keyboard.press("Escape");
+        await expect(panel()).toBeHidden();
+      }
+      await home();
+    }
+    await page.setViewportSize(viewport);
     await home();
-    await page.getByRole("button", { name: "Choose contender models", exact: true }).click();
-    await expect(page.getByPlaceholder("Search models...")).toBeVisible();
-    await gates("phone-360-picker");
-    await page.screenshot({ path: path.join(artifacts, "phone-360-picker.png"), fullPage: true });
-    await page.keyboard.press("Escape");
   });
   await step("logout", async () => {
     loggingOut = true;
@@ -1008,6 +1466,7 @@ try {
   errors.push(redact(error.stack));
 } finally {
   await cleanup();
+  await copyEvidence();
   const gateFailures = summary.gates.filter(
     (g) =>
       g.overflow ||
@@ -1024,10 +1483,21 @@ try {
     count: summary.longTasks.length,
     pass: summary.longTasks.length <= 10,
   };
+  // Page turns: no frame longer than 80 ms and at most two over 34 ms while a page moves.
+  summary.pageTurnSmoothness = {
+    longestFrameMs: 80,
+    maxFramesOver34: 2,
+    turns: summary.pageTurns.length,
+    pass: summary.pageTurns.length > 0 && summary.pageTurns.every((turn) => turn.pass),
+  };
   summary.errors = errors;
   summary.networkFailures = network;
   summary.status =
-    errors.length || network.length || gateFailures.length || !summary.smoothness.pass
+    errors.length ||
+    network.length ||
+    gateFailures.length ||
+    !summary.smoothness.pass ||
+    !summary.pageTurnSmoothness.pass
       ? "fail"
       : "pass";
   await writeFile(path.join(artifacts, "network-failures.json"), JSON.stringify(network, null, 2));
@@ -1042,7 +1512,9 @@ try {
         errors,
         network,
         cleanup: summary.cleanup,
+        pageTurns: summary.pageTurns,
         artifacts,
+        evidence: summary.evidence,
       },
       null,
       2,

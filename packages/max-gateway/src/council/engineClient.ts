@@ -5,7 +5,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocket } from "ws";
 import type { BearerTokenSource } from "../bearerToken.ts";
-import type { CouncilModelInput } from "./types.ts";
+import type { CouncilAttachment, CouncilModelInput } from "./types.ts";
 
 export interface EngineUpdate {
   status: "running" | "needs-attention" | "complete" | "failed" | "cancelled";
@@ -23,6 +23,7 @@ export interface EngineLaunch {
   projectId: string | null;
   model: CouncilModelInput;
   prompt: string;
+  attachments?: readonly CouncilAttachment[];
   onRuntimeMode?: (mode: CouncilRuntimeMode) => void;
 }
 export interface CouncilEngine {
@@ -148,7 +149,7 @@ export class EngineClient implements CouncilEngine {
         runtimeMode,
         interactionMode: "default",
         workspaceStrategy: { type: "root" },
-        initialMessage: { text: input.prompt, attachments: [] },
+        initialMessage: { text: input.prompt, attachments: input.attachments ?? [] },
       });
     };
     try {

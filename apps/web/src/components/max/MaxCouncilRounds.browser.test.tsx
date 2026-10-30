@@ -1,14 +1,16 @@
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 import { useState } from "react";
 import "~/index.css";
 import { act, fakeTimers, render } from "../../../test/render";
 import { MaxCouncilRounds } from "./MaxCouncilRounds";
-import { MaxPromptComposer } from "./MaxPromptComposer";
+import { MaxComposer } from "./MaxComposer";
 import { MaxCouncilReturn } from "./MaxCouncilReturn";
+import { useCouncilHome } from "./councilHome";
 import { EMPTY_COUNCIL_SELECTION, type CouncilSelection } from "./councilSelection";
 import { councilFixture } from "./councilRound.test-fixture";
+import type { CouncilContenderState, CouncilRound } from "./councilApi";
 
 vi.mock("../../lib/utils", () => ({
   cn: (...values: unknown[]) => values.filter(Boolean).join(" "),
@@ -44,7 +46,7 @@ vi.mock("../chat/ProviderModelPicker", () => ({
   }) => (
     <button
       type="button"
-      className="max-council-button"
+      className="max-button"
       aria-label={triggerAriaLabel}
       onClick={() => onInstanceModelChange("codex", "gpt-5")}
     >
@@ -62,19 +64,33 @@ vi.mock("../ChatMarkdown", async () => {
   const { default: Markdown } = await import("react-markdown");
   return { default: ({ text }: { text: string }) => <Markdown>{text}</Markdown> };
 });
+// The upload path needs a live engine connection; its request cycle is covered by client-runtime.
+vi.mock("./councilAttachments", () => ({
+  uploadCouncilAttachments: async ({ staged, copies }: { staged: unknown[]; copies: number }) =>
+    Array.from({ length: copies }, () =>
+      staged.map((_, i) => ({
+        type: "file",
+        id: `pending_${i}`,
+        name: `file${i}`,
+        mimeType: "text/plain",
+        sizeBytes: 1,
+      })),
+    ),
+}));
 
 function ComposerHarness() {
   const [selection, setSelection] = useState<CouncilSelection>(EMPTY_COUNCIL_SELECTION);
   const [created, setCreated] = useState("");
   return (
     <div className="max-scope h-screen overflow-y-auto p-5">
-      <MaxPromptComposer
+      <MaxComposer
         selection={selection}
         onSelectionChange={setSelection}
         templates={[councilFixture().template]}
         apiError={null}
         onRefresh={() => {}}
-        onCreated={(id, environmentId) => setCreated(`${id}:${environmentId}`)}
+        onCreated={(round, environmentId) => setCreated(`${round.id}:${environmentId}`)}
+        placeholder="Ask the council…"
       />
       <p>{created}</p>
     </div>
@@ -85,10 +101,26 @@ async function phone() {
 }
 function wrapped(roundId?: string) {
   return (
-    <div className="max-scope h-screen overflow-y-auto space-y-5 p-5">
+    <div className="max-scope flex h-screen flex-col p-2">
       <MaxCouncilRounds roundId={roundId} />
     </div>
   );
+}
+function finished(contender: CouncilContenderState, finishedAt: string): CouncilContenderState {
+  return { ...contender, status: "complete", finishedAt };
+}
+/** Opens the model window, picks a contender and a judge, and closes it. */
+async function chooseModels(screen: { getByRole: typeof page.getByRole }) {
+  await screen.getByRole("button", { name: "Choose models" }).click();
+  const dialog = page.getByRole("dialog", { name: "Models" });
+  await dialog.getByRole("button", { name: "Choose contender models" }).click();
+  await dialog.getByRole("button", { name: "Choose synthesizer model" }).click();
+  await expect.element(dialog.getByText(/^Synthesizer:/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+}
+/** Pages behind the front one are aria-hidden, so the only article the role query sees is the current page. */
+function currentPage() {
+  return page.getByRole("article");
 }
 
 it("enables Send only with a question, contender and judge, then posts once", async () => {
@@ -99,42 +131,76 @@ it("enables Send only with a question, contender and judge, then posts once", as
       new Response(JSON.stringify({ round: councilFixture().round }), { status: 201 }),
     );
   await using screen = await render(<ComposerHarness />);
-  await expect.element(screen.getByText("Enter a question.")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Send to council" })).toBeDisabled();
   await screen
     .getByRole("textbox", { name: "Question for the council" })
     .fill("How should we launch the council?");
   await expect.element(screen.getByText("Choose at least one contender.")).toBeVisible();
-  await screen.getByRole("button", { name: "Choose contender models" }).click();
-  await expect.element(screen.getByText("Choose a synthesizer.")).toBeVisible();
-  await screen.getByRole("button", { name: "Choose synthesizer model" }).click();
+  await chooseModels(screen);
+  await expect
+    .element(screen.getByRole("button", { name: "Choose models" }))
+    .toHaveTextContent("1 model · judge set");
   await expect.element(screen.getByRole("button", { name: "Send to council" })).toBeEnabled();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/B/composer-ready.png" });
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/composer-ready.png" });
   await screen.getByRole("button", { name: "Send to council" }).click();
   await expect.element(screen.getByText("round-1:environment-1")).toBeVisible();
   expect(fetch).toHaveBeenCalledTimes(1);
 });
-it("resumes, polls through synthesis, stops at completion and returns from Agent Mode", async () => {
+
+it("shows a thinking state, then the first finisher in front, then the synthesis last", async () => {
   await phone();
   const { round } = councilFixture();
+  const second: CouncilContenderState = {
+    ...round.contenders[0]!,
+    key: "c1",
+    roleId: null,
+    roleName: null,
+    text: "Second answer: ship behind a flag.",
+    status: "running",
+  };
+  round.contenders = [{ ...round.contenders[0]!, text: "" }, second];
   using fetch = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response(JSON.stringify({ round })));
   await using screen = await render(wrapped("round-1"), { router: "/?round=round-1" });
-  await expect.element(screen.getByText("Critic", { exact: true })).toBeVisible();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/B/round-running.png" });
-  const synthesizing = {
+  await expect.element(screen.getByRole("status").getByText("Thinking…")).toBeVisible();
+  await expect.element(screen.getByText("0 of 2 answered")).toBeVisible();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/thinking.png" });
+  // The second model finishes first, so its page is in front.
+  const firstFinish = {
+    ...round,
+    contenders: [round.contenders[0]!, finished(second, "2026-10-29T18:00:05Z")],
+  };
+  fetch.mockResolvedValue(new Response(JSON.stringify({ round: firstFinish })));
+  await expect.element(currentPage().getByText("Second answer: ship behind a flag.")).toBeVisible();
+  await expect.element(screen.getByText("1 of 2")).toBeVisible();
+  const synthesizing: CouncilRound = {
     ...round,
     status: "synthesizing",
+    contenders: [
+      finished({ ...round.contenders[0]!, text: "First model, later." }, "2026-10-29T18:00:09Z"),
+      finished(second, "2026-10-29T18:00:05Z"),
+    ],
     synthesis: { ...round.synthesis, status: "running", text: "Comparing perspectives…" },
   };
   fetch.mockResolvedValue(new Response(JSON.stringify({ round: synthesizing })));
-  await expect.element(screen.getByText("Comparing perspectives…")).toBeVisible();
-  const complete = {
-    ...round,
+  await expect.element(screen.getByText("1 of 3")).toBeVisible();
+  // Still reading the first finisher; the later answer joined behind.
+  await expect.element(currentPage().getByText("Second answer: ship behind a flag.")).toBeVisible();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/first-finisher-front.png" });
+  const region = screen.getByRole("region", { name: "Council answers" });
+  await region.element().focus();
+  await userEvent.keyboard("{ArrowRight}");
+  await expect.element(currentPage().getByText("First model, later.")).toBeVisible();
+  await userEvent.keyboard("{ArrowRight}");
+  await expect.element(currentPage().getByText("Comparing perspectives…")).toBeVisible();
+  await expect.element(screen.getByText("3 of 3")).toBeVisible();
+  const complete: CouncilRound = {
+    ...synthesizing,
     status: "complete",
-    contenders: round.contenders.map((entry) => ({ ...entry, status: "complete" })),
     synthesis: {
       ...round.synthesis,
+      threadId: "thread-1",
       status: "complete",
       text: "Launch gradually",
       structured: {
@@ -146,13 +212,10 @@ it("resumes, polls through synthesis, stops at completion and returns from Agent
     },
   };
   fetch.mockResolvedValue(new Response(JSON.stringify({ round: complete })));
-  await expect.element(screen.getByText("Launch gradually")).toBeVisible();
-  await page.screenshot({
-    fullPage: false,
-    path: "__screenshots__/B/round-complete-meta-debate.png",
-  });
+  await expect.element(currentPage().getByText("Launch gradually")).toBeVisible();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/synthesis-page.png" });
   fetch.mockImplementation(async () => new Response(JSON.stringify({ threadId: "thread-1" })));
-  await screen.getByRole("button", { name: "Continue in Agent Mode" }).first().click();
+  await currentPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/environment-1/thread-1"),
   );
@@ -161,7 +224,27 @@ it("resumes, polls through synthesis, stops at completion and returns from Agent
   expect(screen.router?.state.location.search).toEqual({ round: "round-1" });
   sessionStorage.removeItem("max.returnRound:/environment-1/thread-1");
 });
-it("shows needs-attention and failed/skipped states", async () => {
+
+it("turns pages with the previous and next buttons and the page edge", async () => {
+  await phone();
+  const { round } = councilFixture();
+  round.status = "complete";
+  round.contenders = [finished(round.contenders[0]!, "2026-10-29T18:00:01Z")];
+  round.synthesis = { ...round.synthesis, status: "complete", text: "Plain synthesis text." };
+  using _fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response(JSON.stringify({ round })));
+  await using screen = await render(wrapped(round.id));
+  await expect.element(screen.getByText("1 of 2")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+  await screen.getByRole("button", { name: "Next page" }).first().click();
+  await expect.element(currentPage().getByText("Plain synthesis text.")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Next page" }).last()).toBeDisabled();
+  await screen.getByRole("button", { name: "Previous page" }).click();
+  await expect.element(currentPage().getByText(/Start with one well-tested path/)).toBeVisible();
+});
+
+it("shows needs-attention and failed/skipped states on their pages", async () => {
   await phone();
   const { round } = councilFixture();
   round.contenders[0]!.status = "needs-attention";
@@ -169,55 +252,48 @@ it("shows needs-attention and failed/skipped states", async () => {
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response(JSON.stringify({ round })));
   await using screen = await render(wrapped(round.id));
-  await expect.element(screen.getByText(/This model is waiting for an approval/)).toBeVisible();
+  await expect
+    .element(currentPage().getByText(/This model is waiting for an approval/))
+    .toBeVisible();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/approval-page.png" });
   round.status = "failed";
   round.contenders[0]!.status = "failed";
+  round.contenders[0]!.finishedAt = "2026-10-29T18:00:02Z";
   round.contenders[0]!.error = "Provider unavailable";
   round.synthesis.status = "skipped";
   fetch.mockResolvedValue(new Response(JSON.stringify({ round })));
   await screen.rerender(wrapped("round-2"));
-  await expect.element(screen.getByText("Provider unavailable")).toBeVisible();
+  await expect.element(currentPage().getByText("Provider unavailable")).toBeVisible();
+  await screen.getByRole("button", { name: "Next page" }).first().click();
   await expect
-    .element(screen.getByText("No contender answered, so synthesis was skipped."))
+    .element(currentPage().getByText("No contender answered, so synthesis was skipped."))
     .toBeVisible();
 });
+
 it("preserves malformed synthesis as readable raw text", async () => {
   await phone();
   const { round } = councilFixture();
   round.status = "complete";
+  round.contenders = [finished(round.contenders[0]!, "2026-10-29T18:00:01Z")];
   round.synthesis.status = "complete";
   round.synthesis.text = "A useful answer, even without JSON.";
   using _fetch = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response(JSON.stringify({ round })));
   await using screen = await render(wrapped(round.id));
-  await expect.element(screen.getByText(/Couldn’t read the structured format/)).toBeVisible();
+  await screen.getByRole("button", { name: "Next page" }).first().click();
+  await expect
+    .element(currentPage().getByText(/Couldn’t read the structured format/))
+    .toBeVisible();
   await page.screenshot({
     fullPage: false,
-    path: "__screenshots__/B/synthesis-parse-fallback.png",
+    path: "__screenshots__/G1/synthesis-parse-fallback.png",
   });
 });
-it("lists saved rounds and opens their URL", async () => {
-  await phone();
-  const { round, template } = councilFixture();
-  using _fetch = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation(
-      async (url) =>
-        new Response(
-          JSON.stringify(
-            String(url).includes("templates") ? { templates: [template] } : { rounds: [round] },
-          ),
-        ),
-    );
-  await using screen = await render(wrapped());
-  await expect.element(screen.getByRole("button", { name: /How should we launch/ })).toBeVisible();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/B/rounds-list.png" });
-  await screen.getByRole("button", { name: /How should we launch/ }).click();
-  expect(screen.router?.state.location.search).toEqual({ round: "round-1" });
-});
+
 it("explains missing gateway instead of enabling Send", async () => {
   await phone();
+  useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   using _fetch = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response("{}", { status: 404 }));
@@ -226,11 +302,12 @@ it("explains missing gateway instead of enabling Send", async () => {
     .element(screen.getByText("Council needs the MAX gateway", { exact: true }).first())
     .toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Send to council" })).toBeDisabled();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/B/council-api-missing.png" });
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/council-api-missing.png" });
 });
 
-it("creates, edits and deletes a custom template, keeping built-ins read-only", async () => {
+it("creates, edits and deletes a custom template from the model window, keeping built-ins read-only", async () => {
   await phone();
+  useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   const { template } = councilFixture();
   let templates = [template];
   using fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
@@ -248,13 +325,17 @@ it("creates, edits and deletes a custom template, keeping built-ins read-only", 
     );
   });
   await using screen = await render(wrapped());
-  await screen.getByRole("button", { name: "Manage templates" }).click();
-  const dialog = page.getByRole("dialog");
+  await screen.getByRole("button", { name: "Add files or settings" }).click();
+  await page.getByRole("menuitem", { name: "Template and project" }).click();
+  const models = page.getByRole("dialog", { name: "Models" });
+  await expect.element(models.getByLabelText("Project folder")).toBeVisible();
+  await models.getByRole("button", { name: "Manage templates", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Manage templates" });
   await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Launch review");
   await dialog
     .getByRole("textbox", { name: "Judge instruction" })
     .fill("Find the safest launch path");
-  await page.screenshot({ fullPage: false, path: "__screenshots__/B/template-manager.png" });
+  await page.screenshot({ fullPage: false, path: "__screenshots__/G1/template-manager.png" });
   await dialog.getByRole("button", { name: "Save template" }).click();
   await expect.element(dialog.getByRole("button", { name: "Delete template" })).toBeVisible();
   await dialog.getByRole("textbox", { name: "Description" }).fill("Updated description");
@@ -276,7 +357,7 @@ it("pauses polling when hidden, resumes on visibility and aborts on unmount", as
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response(JSON.stringify({ round })));
   await using screen = await render(wrapped(round.id));
-  await expect.element(screen.getByText("Critic", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("0 of 1 answered")).toBeVisible();
   using _timers = fakeTimers();
   hidden.mockReturnValue(true);
   await act(() => document.dispatchEvent(new Event("visibilitychange")));
@@ -291,7 +372,7 @@ it("pauses polling when hidden, resumes on visibility and aborts on unmount", as
   expect(signal?.aborted).toBe(true);
 });
 
-it("keeps the question when POST fails and allows retry", async () => {
+it("keeps the question and files when POST fails and allows retry", async () => {
   using fetch = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(
@@ -300,14 +381,44 @@ it("keeps the question when POST fails and allows retry", async () => {
   await using screen = await render(<ComposerHarness />);
   const prompt = screen.getByRole("textbox", { name: "Question for the council" });
   await prompt.fill("Keep this question");
-  await screen.getByRole("button", { name: "Choose contender models" }).click();
-  await screen.getByRole("button", { name: "Choose synthesizer model" }).click();
+  await chooseModels(screen);
   await screen.getByRole("button", { name: "Send to council" }).click();
   await expect.element(screen.getByText("Provider disconnected")).toBeVisible();
   await expect.element(prompt).toHaveValue("Keep this question");
   fetch.mockResolvedValue(new Response(JSON.stringify({ round: councilFixture().round })));
   await screen.getByRole("button", { name: "Send to council" }).click();
   await expect.element(screen.getByText("round-1:environment-1")).toBeVisible();
+});
+
+it("stages files from the plus button, blocks unreadable images and sends one copy per contender", async () => {
+  using fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      new Response(JSON.stringify({ round: councilFixture().round }), { status: 201 }),
+    );
+  await using screen = await render(<ComposerHarness />);
+  await screen.getByRole("textbox", { name: "Question for the council" }).fill("Read this");
+  const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await userEvent.upload(input, [
+    new File(["hello"], "notes.txt", { type: "text/plain" }),
+    new File([new Uint8Array(4)], "scan.img", { type: "image/x-unknown" }),
+  ]);
+  await expect
+    .element(screen.getByRole("list", { name: "Attached files" }))
+    .toHaveTextContent("notes.txt");
+  await expect.element(screen.getByText(/scan\.img is an image type/)).toBeVisible();
+  await chooseModels(screen);
+  await screen.getByRole("button", { name: "Send to council" }).click();
+  await expect.element(screen.getByText("round-1:environment-1")).toBeVisible();
+  const body = JSON.parse(
+    String(fetch.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body),
+  );
+  expect(body.contenders[0].attachments).toEqual([
+    { type: "file", id: "pending_0", name: "file0", mimeType: "text/plain", sizeBytes: 1 },
+  ]);
+  await expect
+    .element(screen.getByRole("list", { name: "Attached files" }))
+    .not.toBeInTheDocument();
 });
 
 it("cancels an active round through the coordinator", async () => {
@@ -324,6 +435,7 @@ it("cancels an active round through the coordinator", async () => {
 });
 
 it("puts a newly created round in the URL and sends default roles", async () => {
+  useCouncilHome.setState({ templates: [], rounds: [], error: null, loaded: false });
   const { template, round } = councilFixture();
   using fetch = vi
     .spyOn(globalThis, "fetch")
@@ -341,15 +453,14 @@ it("puts a newly created round in the URL and sends default roles", async () => 
     );
   await using screen = await render(wrapped());
   await screen.getByRole("textbox", { name: "Question for the council" }).fill("Launch question");
-  await screen.getByRole("button", { name: "Choose contender models" }).click();
-  await screen.getByRole("button", { name: "Choose synthesizer model" }).click();
+  await chooseModels(screen);
   await screen.getByRole("button", { name: "Send to council" }).click();
   await vi.waitFor(() => expect(screen.router?.state.location.search).toEqual({ round: round.id }));
   const body = fetch.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body;
   expect(JSON.parse(String(body))).toMatchObject({
     projectId: null,
     templateId: "meta-debate",
-    contenders: [{ instanceId: "codex", roleId: "critic" }],
+    contenders: [{ instanceId: "codex", roleId: "critic", attachments: [] }],
   });
 });
 
@@ -357,20 +468,20 @@ it("shows approvals still required and removes the note for auto mode", async ()
   await phone();
   const { round } = councilFixture();
   round.status = "complete";
-  round.contenders[0]!.status = "complete";
+  round.contenders = [finished(round.contenders[0]!, "2026-10-29T18:00:01Z")];
   round.contenders[0]!.runtimeMode = "approval-required";
   using _fetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(async () => new Response(JSON.stringify({ round })));
   await using screen = await render(wrapped("round-1"), { router: "/?round=round-1" });
-  await expect.element(screen.getByText("This model may ask for tool approvals.")).toBeVisible();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/F1/approval-mode-note.png" });
+  await expect
+    .element(currentPage().getByText("This model may ask for tool approvals."))
+    .toBeVisible();
   round.contenders[0]!.runtimeMode = "auto";
   await screen.rerender(wrapped("round-2"));
   await expect
     .element(screen.getByText("This model may ask for tool approvals."))
     .not.toBeInTheDocument();
-  await page.screenshot({ fullPage: false, path: "__screenshots__/F1/auto-mode-no-note.png" });
 });
 
 it("keeps the round open and displays a restore failure", async () => {
