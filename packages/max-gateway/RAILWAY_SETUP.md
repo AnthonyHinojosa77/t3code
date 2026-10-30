@@ -136,3 +136,5 @@ This check is not done by the PR. After the service is healthy and the companion
 4. Confirm an attachment round-trip: upload a file and download it back through the proxied app. Unverified until this check is run.
 
 `/__max/health` returning `{"ok":true}` only proves the gateway process is up. It does not prove the tunnel, the Mini, or the phone path.
+
+For the permanent macOS companion login service, see [COMPANION.md](COMPANION.md).

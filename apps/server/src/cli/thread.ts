@@ -1,5 +1,8 @@
 import {
   OrchestratorMcpFailure,
+  OrchestratorMcpCapabilitiesResult,
+  type OrchestratorMcpModelOption,
+  type ProviderOptionSelection,
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
@@ -137,6 +140,7 @@ const reportThreadErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 const decodeFailureText = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestratorMcpFailure));
+const decodeOptionsJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const printJson = (value: unknown) => Console.log(encodeJson(value));
 
@@ -532,6 +536,114 @@ const threadListCommand = Command.make("list", {
   ),
 );
 
+export const resolveStartModelOptions = Effect.fn("cli.thread.modelOptions")(function* (
+  tools: ThreadTools,
+  input: {
+    provider?: string | undefined;
+    model?: string | undefined;
+    effort?: string | undefined;
+    fast: boolean;
+    modelOptions?: string | undefined;
+  },
+) {
+  if (input.effort === undefined && !input.fast && input.modelOptions === undefined)
+    return undefined;
+  if (!input.provider || !input.model) {
+    return yield* new ThreadUsageError({
+      detail: "--effort, --fast and --model-options need --provider and --model.",
+    });
+  }
+  const parsed =
+    input.modelOptions === undefined
+      ? undefined
+      : yield* decodeOptionsJson(input.modelOptions).pipe(
+          Effect.mapError(() => new ThreadUsageError({ detail: "Invalid --model-options JSON." })),
+        );
+  const explicit = yield* Effect.try({
+    try: (): Array<ProviderOptionSelection> => {
+      if (input.modelOptions === undefined) return [];
+      const value: unknown = parsed;
+      const entries: unknown[] = Array.isArray(value)
+        ? value
+        : value !== null && typeof value === "object"
+          ? Object.entries(value).map(([id, value]) => ({ id, value }))
+          : [];
+      if (
+        value === null ||
+        typeof value !== "object" ||
+        entries.some(
+          (entry) =>
+            entry === null ||
+            typeof entry !== "object" ||
+            !("id" in entry) ||
+            typeof entry.id !== "string" ||
+            !entry.id.trim() ||
+            !("value" in entry) ||
+            !(
+              typeof entry.value === "boolean" ||
+              (typeof entry.value === "string" && entry.value.trim())
+            ),
+        )
+      ) {
+        throw new Error("expected an array of {id, value} or an object with string/boolean values");
+      }
+      return entries as Array<ProviderOptionSelection>;
+    },
+    catch: (error) =>
+      new ThreadUsageError({
+        detail: `Invalid --model-options JSON: ${error instanceof Error ? error.message : String(error)}`,
+      }),
+  });
+  const capabilities = yield* tools.call(
+    "orchestrator_capabilities",
+    { search: input.model },
+    OrchestratorMcpCapabilitiesResult,
+  );
+  const provider = capabilities.providers.find(
+    (entry) => entry.providerInstanceId === input.provider,
+  );
+  const model = provider?.models.find((entry) => entry.id === input.model);
+  if (!model)
+    return yield* new ThreadUsageError({
+      detail: `Model '${input.model}' is not advertised by provider '${input.provider}'.`,
+    });
+  const descriptors = model.options ?? [];
+  const selections = new Map<string, ProviderOptionSelection>();
+  const add = (id: string, value: string | boolean) => selections.set(id, { id, value });
+  const allowed = (descriptor: OrchestratorMcpModelOption | undefined) =>
+    descriptor?.values.map(String).join(", ") || "none";
+  if (input.effort !== undefined) {
+    const descriptor = descriptors.find(
+      (entry) => entry.id === "reasoningEffort" || entry.id === "effort",
+    );
+    if (!descriptor?.values.includes(input.effort))
+      return yield* new ThreadUsageError({
+        detail: `Unsupported --effort '${input.effort}'. Allowed values: ${allowed(descriptor)}.`,
+      });
+    add(descriptor.id, input.effort);
+  }
+  if (input.fast) {
+    const tier = descriptors.find((entry) => entry.id === "serviceTier");
+    const boolean = descriptors.find((entry) => entry.id === "fastMode");
+    if (tier?.values.includes("priority")) add(tier.id, "priority");
+    else if (tier?.values.includes("fast")) add(tier.id, "fast");
+    else if (boolean?.values.includes(true)) add(boolean.id, true);
+    else
+      return yield* new ThreadUsageError({
+        detail: `Unsupported --fast. Allowed serviceTier values: ${allowed(tier)}; fastMode values: ${allowed(boolean)}.`,
+      });
+  }
+  for (const selection of explicit) {
+    const descriptor = descriptors.find((entry) => entry.id === selection.id);
+    if (!descriptor?.values.includes(selection.value))
+      return yield* new ThreadUsageError({
+        detail: `Unsupported model option '${selection.id}' value '${selection.value}'. Allowed values: ${allowed(descriptor)}. Allowed option ids: ${descriptors.map((entry) => entry.id).join(", ") || "none"}.`,
+      });
+    add(selection.id, selection.value);
+  }
+  return [...selections.values()];
+});
+
 const threadStartCommand = Command.make("start", {
   ...projectLocationFlags,
   project: Argument.String("project").pipe(
@@ -548,6 +660,24 @@ const threadStartCommand = Command.make("start", {
   ),
   model: Flag.String("model").pipe(
     Flag.withDescription("Model slug. Defaults to the project's default model."),
+    Flag.optional,
+  ),
+  effort: Flag.String("effort").pipe(
+    Flag.withDescription(
+      "Reasoning effort advertised by the model. Requires --provider and --model.",
+    ),
+    Flag.optional,
+  ),
+  fast: Flag.Boolean("fast").pipe(
+    Flag.withDescription(
+      "Use the model's fast service tier/mode. Requires --provider and --model.",
+    ),
+    Flag.withDefault(false),
+  ),
+  modelOptions: Flag.String("model-options").pipe(
+    Flag.withDescription(
+      "JSON model options; overrides --effort/--fast. Requires --provider and --model.",
+    ),
     Flag.optional,
   ),
   worktree: Flag.String("worktree").pipe(
@@ -571,6 +701,14 @@ const threadStartCommand = Command.make("start", {
       if (Option.isSome(flags.provider) !== Option.isSome(flags.model)) {
         return yield* new ThreadUsageError({ detail: "--provider and --model go together." });
       }
+      if (
+        (Option.isSome(flags.effort) || flags.fast || Option.isSome(flags.modelOptions)) &&
+        Option.isNone(flags.provider)
+      ) {
+        return yield* new ThreadUsageError({
+          detail: "--effort, --fast and --model-options need --provider and --model.",
+        });
+      }
       const title = yield* decodeTitle(
         Option.getOrElse(flags.title, () => titleFromMessage(message)),
       ).pipe(Effect.mapError(() => new ThreadUsageError({ detail: "The title is empty." })));
@@ -578,6 +716,13 @@ const threadStartCommand = Command.make("start", {
         flags,
         Effect.fn("cli.thread.start")(function* (tools) {
           const project = yield* resolveProject(tools, flags.project);
+          const options = yield* resolveStartModelOptions(tools, {
+            provider: Option.getOrUndefined(flags.provider),
+            model: Option.getOrUndefined(flags.model),
+            effort: Option.getOrUndefined(flags.effort),
+            fast: flags.fast,
+            modelOptions: Option.getOrUndefined(flags.modelOptions),
+          });
           const launched = yield* tools.call(
             "t3_thread_launch",
             {
@@ -590,6 +735,7 @@ const threadStartCommand = Command.make("start", {
                     modelSelection: {
                       instanceId: flags.provider.value,
                       model: flags.model.value,
+                      ...(options === undefined ? {} : { options }),
                     },
                   }
                 : {}),

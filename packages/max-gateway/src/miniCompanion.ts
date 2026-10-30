@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - The companion forwards raw HTTP and WebSocket bytes to the local T3 server.
 // @effect-diagnostics globalTimers:off - Reconnect backoff and heartbeats are socket timers.
 // @effect-diagnostics globalDate:off - Heartbeat deadlines use wall-clock time.
+import * as NodeFS from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import type { IncomingMessage } from "node:http";
@@ -468,14 +469,18 @@ export function startMiniCompanion(options: MiniCompanionOptions): RunningMiniCo
 function isDirectRun(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
-  return import.meta.url === pathToFileURL(entry).href;
+  return import.meta.url === pathToFileURL(NodeFS.realpathSync(entry)).href;
 }
 
 if (isDirectRun()) {
   const gatewayUrl = process.env.MAX_GATEWAY_URL ?? process.env.MAX_TUNNEL_URL;
   const tunnelSecret = process.env.MAX_TUNNEL_SECRET;
-  if (!gatewayUrl || !tunnelSecret) {
-    process.stderr.write("MAX_GATEWAY_URL and MAX_TUNNEL_SECRET are required\n");
+  if (!tunnelSecret) {
+    process.stderr.write("MAX_TUNNEL_SECRET is required\n");
+    process.exit(1);
+  }
+  if (!gatewayUrl) {
+    process.stderr.write("MAX_GATEWAY_URL is required\n");
     process.exit(1);
   }
   const companion = startMiniCompanion({ gatewayUrl, tunnelSecret });
