@@ -1,0 +1,101 @@
+.max-scope .max-council-button {
+  border: 1px solid var(--max-line-strong);
+  border-radius: 3px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.75rem;
+  color: var(--max-green);
+  min-height: 36px;
+}
+.max-scope .max-council-button:disabled {
+  color: var(--max-muted);
+  cursor: not-allowed;
+}
+.max-scope .max-council-button:hover:not(:disabled) {
+  border-color: var(--max-green);
+}
+.max-scope :is(select, input) {
+  max-width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--max-line-strong);
+  border-radius: 3px;
+  padding: 0.35rem;
+  background: var(--max-black);
+  color: var(--max-light);
+}
+.max-scope :is(button, select, input, textarea):focus-visible {
+  outline: 2px solid var(--max-green);
+  outline-offset: 2px;
+}
+.max-council-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--max-line-strong);
+  border-radius: 4px;
+  font-size: 0.875rem;
+  background: var(--max-black);
+}
+.max-council-answer {
+  overflow-wrap: anywhere;
+  min-height: 2rem;
+}
+.max-council-answer-collapsed {
+  max-height: 24rem;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.max-council-status {
+  color: var(--max-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.max-council-status[data-active="true"]::before {
+  content: "●";
+  margin-right: 0.4rem;
+  color: var(--max-green);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .max-council-status[data-active="true"]::before {
+    animation: council-pulse 1.5s ease-in-out infinite;
+  }
+}
+@keyframes council-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.max-council-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--max-line-strong);
+}
+.max-council-sheet {
+  width: min(100%, 32rem);
+  height: 100%;
+  overflow-y: auto;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  color: var(--max-light);
+  background: var(--max-black);
+}
+.max-council-sheet label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.max-council-sheet textarea {
+  padding: 0.5rem;
+  border: 1px solid var(--max-line-strong);
+  background: var(--max-black);
+}
+
+.max-council-card > .max-council-answer {
+  min-height: 8rem;
+}

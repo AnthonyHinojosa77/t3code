@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./styles/max-terminal.css";
+@import "./components/max/council.css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 @custom-variant light (&:not(.dark, .dark *));
