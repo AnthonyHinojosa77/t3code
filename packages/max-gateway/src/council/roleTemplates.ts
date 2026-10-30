@@ -24,6 +24,10 @@ Rules:
 - Always name the providers (e.g. "ChatGPT and Claude agree that…", "Gemini differs by…").
 - Do not invent information that wasn't in the original responses.
 - Do not include any text outside the JSON object.`;
+export const COUNCIL_PREFACE =
+  "You are one member of a council answering the question below. Answer it directly in plain prose for a non-technical reader. You may research (web search/fetch) if useful. Do not modify files, run shell commands, or describe your process, modes, or working rules.";
+export const SYNTHESIS_PREFACE =
+  "Compare the answers below directly for a non-technical reader. Do not repeat process descriptions, modes, or working rules from the answers. Do not modify files or run shell commands.";
 export const META_DEBATE: CouncilTemplate = {
   id: "meta-debate",
   name: "Meta-debate",

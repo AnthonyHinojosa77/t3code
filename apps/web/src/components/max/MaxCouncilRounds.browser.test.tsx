@@ -349,3 +349,23 @@ it("puts a newly created round in the URL and sends default roles", async () => 
     contenders: [{ instanceId: "codex", roleId: "critic" }],
   });
 });
+
+it("shows approvals still required and removes the note for auto mode", async () => {
+  await phone();
+  const { round } = councilFixture();
+  round.status = "complete";
+  round.contenders[0]!.status = "complete";
+  round.contenders[0]!.runtimeMode = "approval-required";
+  using _fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async () => new Response(JSON.stringify({ round })));
+  await using screen = await render(wrapped("round-1"), { router: "/?round=round-1" });
+  await expect.element(screen.getByText("This model may ask for tool approvals.")).toBeVisible();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/F1/approval-mode-note.png" });
+  round.contenders[0]!.runtimeMode = "auto";
+  await screen.rerender(wrapped("round-2"));
+  await expect
+    .element(screen.getByText("This model may ask for tool approvals."))
+    .not.toBeInTheDocument();
+  await page.screenshot({ fullPage: false, path: "__screenshots__/F1/auto-mode-no-note.png" });
+});
