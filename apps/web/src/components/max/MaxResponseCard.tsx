@@ -98,6 +98,9 @@ export function MaxResponseCard({
 }) {
   return (
     <AnswerFrame title={displayName} status={contender.status}>
+      {contender.runtimeMode === "approval-required" && (
+        <p className="text-xs text-(--max-muted)">This model may ask for tool approvals.</p>
+      )}
       {contender.roleName && <p className="text-xs text-(--max-amber)">{contender.roleName}</p>}
       {contender.status === "needs-attention" && (
         <p role="status" className="text-(--max-amber)">

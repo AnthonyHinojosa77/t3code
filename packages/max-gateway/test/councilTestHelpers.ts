@@ -13,6 +13,7 @@ export class FakeEngine implements CouncilEngine {
   interrupts: string[] = [];
   async launch(i: EngineLaunch) {
     this.launches.push(i);
+    i.onRuntimeMode?.("auto");
   }
   observe(id: string, fn: (u: EngineUpdate) => void) {
     this.callbacks.set(id, fn);

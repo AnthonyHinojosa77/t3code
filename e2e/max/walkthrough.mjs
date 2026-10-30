@@ -401,6 +401,11 @@ try {
   );
   sessionId = issued.sessionId;
   engine = new EngineClient({ getToken: async () => issued.token });
+  const config = await engine.rpc("server.getConfig", {});
+  summary.advertisedRuntimeModes = config.providers.map((provider) => ({
+    instanceId: provider.instanceId,
+    modes: provider.supportedRuntimeModes ?? [],
+  }));
   secrets.push(issued.token);
   assert(sessionId && issued.token, "CLI did not return session and token");
   await writeFile(
@@ -746,6 +751,9 @@ try {
       for (let i = 0; i < 2; i++) {
         assert.equal(completed.contenders[i].status, "complete");
         assert(completed.contenders[i].text.trim());
+        assert(!/Mode:/i.test(completed.contenders[i].text), "Contender leaked mode boilerplate");
+        assert(["auto", "approval-required"].includes(completed.contenders[i].runtimeMode));
+        await expect(cards.nth(i)).not.toContainText(/Mode:/i);
         await expect(
           cards.nth(i).getByRole("heading", { name: summary.displayNames[i], exact: true }),
         ).toBeVisible();
@@ -753,6 +761,11 @@ try {
       }
       await cards.first().scrollIntoViewIfNeeded();
       await gates("completed-answer-text");
+      summary.runtimeModes = completed.contenders.map((c) => ({
+        threadId: c.threadId,
+        runtimeMode: c.runtimeMode,
+      }));
+      summary.synthesisRuntimeMode = completed.synthesis.runtimeMode;
       assert.equal(completed.synthesis.status, "complete");
       assert(completed.synthesis.text.trim());
       const synthesis = page.getByRole("region", { name: "Council synthesis" });

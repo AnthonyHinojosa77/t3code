@@ -1,3 +1,4 @@
+import type { CouncilRuntimeMode } from "./engineClient.ts";
 import type { ModelSelection } from "../../../contracts/src/modelSelection.ts";
 export type ModelSelectionOptions = ModelSelection["options"];
 export interface CouncilModelInput {
@@ -42,6 +43,7 @@ export interface CouncilContenderState extends CouncilModelInput {
   options: ModelSelectionOptions | null;
   roleId: string | null;
   roleName: string | null;
+  runtimeMode?: CouncilRuntimeMode | null;
   threadId: string | null;
   status: ContenderStatus;
   text: string;
@@ -57,6 +59,7 @@ export interface CouncilStructuredSynthesis {
 }
 export interface CouncilSynthesisState extends CouncilModelInput {
   options: ModelSelectionOptions | null;
+  runtimeMode?: CouncilRuntimeMode | null;
   threadId: string | null;
   status: "pending" | "running" | "complete" | "failed" | "skipped" | "cancelled";
   format: "meta-debate" | "freeform";

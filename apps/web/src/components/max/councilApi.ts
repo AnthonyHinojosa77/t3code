@@ -40,6 +40,7 @@ export type ContenderStatus =
   | "cancelled";
 interface AnswerState extends CouncilModelInput {
   options: ModelSelection["options"] | null;
+  runtimeMode?: "auto" | "approval-required" | null;
   threadId: string | null;
   text: string;
   error: string | null;

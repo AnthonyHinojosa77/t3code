@@ -12,12 +12,18 @@ export interface EngineUpdate {
   text: string;
   error?: string;
 }
+export type CouncilRuntimeMode = "auto" | "approval-required";
+class EngineRpcRejected extends Error {}
+export function councilRuntimeMode(modes: readonly string[] = []): CouncilRuntimeMode {
+  return modes.includes("auto") ? "auto" : "approval-required";
+}
 export interface EngineLaunch {
   threadId: string;
   title: string;
   projectId: string | null;
   model: CouncilModelInput;
   prompt: string;
+  onRuntimeMode?: (mode: CouncilRuntimeMode) => void;
 }
 export interface CouncilEngine {
   launch(input: EngineLaunch): Promise<void>;
@@ -92,7 +98,7 @@ export class EngineClient implements CouncilEngine {
                 clearTimeout(p.timer);
                 this.pending.delete(String(frame.requestId));
                 if (frame.exit?._tag === "Success") p.resolve(frame.exit.value);
-                else p.reject(new Error("Engine RPC rejected the request"));
+                else p.reject(new EngineRpcRejected("Engine RPC rejected the request"));
               }
             });
           }),
@@ -118,21 +124,36 @@ export class EngineClient implements CouncilEngine {
     const projectId =
       input.projectId ??
       (await this.rpc<{ projectId: string }>("projects.ensureScratch", {})).projectId;
-    await this.rpc("orchestration.launchThread", {
-      commandId: `council-launch-${input.threadId}`,
-      threadId: input.threadId,
-      projectId,
-      title: input.title,
-      modelSelection: {
-        instanceId: input.model.instanceId,
-        model: input.model.model,
-        ...(input.model.options == null ? {} : { options: input.model.options }),
-      },
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      workspaceStrategy: { type: "root" },
-      initialMessage: { text: input.prompt, attachments: [] },
-    });
+    const config = await this.rpc<{
+      providers: { instanceId: string; supportedRuntimeModes?: string[] }[];
+    }>("server.getConfig", {});
+    const mode = councilRuntimeMode(
+      config.providers.find((p) => p.instanceId === input.model.instanceId)?.supportedRuntimeModes,
+    );
+    const launch = async (runtimeMode: CouncilRuntimeMode) => {
+      input.onRuntimeMode?.(runtimeMode);
+      await this.rpc("orchestration.launchThread", {
+        commandId: `council-launch-${input.threadId}-${runtimeMode}`,
+        threadId: input.threadId,
+        projectId,
+        title: input.title,
+        modelSelection: {
+          instanceId: input.model.instanceId,
+          model: input.model.model,
+          ...(input.model.options == null ? {} : { options: input.model.options }),
+        },
+        runtimeMode,
+        interactionMode: "default",
+        workspaceStrategy: { type: "root" },
+        initialMessage: { text: input.prompt, attachments: [] },
+      });
+    };
+    try {
+      await launch(mode);
+    } catch (error) {
+      if (mode !== "auto" || !(error instanceof EngineRpcRejected)) throw error;
+      await launch("approval-required");
+    }
   }
   observe(threadId: string, update: (value: EngineUpdate) => void) {
     let stopped = false;

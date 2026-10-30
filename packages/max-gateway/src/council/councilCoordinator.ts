@@ -5,7 +5,7 @@ import * as NodeCrypto from "node:crypto";
 
 import type { CouncilEngine, EngineUpdate } from "./engineClient.ts";
 import { CouncilStore } from "./councilStore.ts";
-import { RoleTemplates } from "./roleTemplates.ts";
+import { RoleTemplates, COUNCIL_PREFACE, SYNTHESIS_PREFACE } from "./roleTemplates.ts";
 import {
   CouncilError,
   type CouncilRoundInput,
@@ -133,6 +133,7 @@ export class CouncilCoordinator {
       throw new CouncilError(400, "Duplicate contender or unknown role");
     const now = new Date().toISOString();
     const base = {
+      runtimeMode: null,
       threadId: null,
       status: "pending" as const,
       text: "",
@@ -189,7 +190,7 @@ export class CouncilCoordinator {
         return;
       }
       r.status = "synthesizing";
-      const prompt = `${t.synthesizerInstruction}\n\nOriginal prompt:\n${r.prompt}\n\n${r.contenders
+      const prompt = `${t.id === "meta-debate" ? SYNTHESIS_PREFACE + "\n\n" : ""}${t.synthesizerInstruction}\n\nOriginal prompt:\n${r.prompt}\n\n${r.contenders
         .filter((c) => c.status === "complete")
         .map(
           (c) =>
@@ -202,7 +203,13 @@ export class CouncilCoordinator {
     for (const c of r.contenders)
       if (!terminal(c.status)) {
         const role = t.roles.find((role) => role.id === c.roleId);
-        this.start(r, c, role ? `${role.instruction}\n\n${r.prompt}` : r.prompt, false);
+        const prompt = role ? `${role.instruction}\n\n${r.prompt}` : r.prompt;
+        this.start(
+          r,
+          c,
+          t.id === "meta-debate" ? `${COUNCIL_PREFACE}\n\n${prompt}` : prompt,
+          false,
+        );
       }
   }
   private start(
@@ -271,6 +278,12 @@ export class CouncilCoordinator {
         projectId: r.projectId,
         model: state,
         prompt,
+        onRuntimeMode: (mode) => {
+          if (!disposed) {
+            state.runtimeMode = mode;
+            this.save(r);
+          }
+        },
       })
       .then(
         () => {
