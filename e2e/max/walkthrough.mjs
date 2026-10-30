@@ -26,6 +26,10 @@ import { CouncilStore } from "../../packages/max-gateway/src/council/councilStor
 import { RoleTemplates } from "../../packages/max-gateway/src/council/roleTemplates.ts";
 import { COMPANION_SCOPES } from "../../packages/max-gateway/src/bearerToken.ts";
 import { buildSeededRound, SEEDED_PAGE_TITLES } from "./seedRound.mjs";
+import {
+  isPhoneLayout,
+  MAX_PHONE_LAYOUT_QUERY,
+} from "../../apps/web/src/components/max/maxLayout.ts";
 
 const researchRound = process.argv.includes("--research-round");
 const lightScheme = process.argv.includes("--light");
@@ -102,6 +106,9 @@ const summary = {
   cleanup: {},
   cancelledAtLogout: [],
   cancelledAtReload: [],
+  boots: [],
+  focusRings: [],
+  layoutChecks: [],
 };
 const errors = [],
   network = [],
@@ -339,6 +346,8 @@ async function gates(name) {
       return {
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         truncatedTitles: titles.filter((el) => el.scrollWidth > el.clientWidth).length,
+        // A finger cannot hover, so a tooltip on a phone is always a stuck one.
+        tooltips: [...document.querySelectorAll('[role="tooltip"]')].filter(visible).length,
         smallTargets: primary
           .map((el) => ({
             label: el.getAttribute("aria-label") || el.textContent.trim(),
@@ -379,6 +388,7 @@ async function step(name, fn) {
 }
 async function reloadPage() {
   await page.waitForLoadState("networkidle");
+  const expected = await expectedBootScheme();
   reloading = true;
   try {
     await page.reload();
@@ -386,6 +396,157 @@ async function reloadPage() {
   } finally {
     reloading = false;
   }
+  await checkBoot(expected, "reload");
+}
+/** The appearance the next load must boot with: the stored choice, else MAX's dark default. */
+async function expectedBootScheme() {
+  const stored = await page.evaluate(() => localStorage.getItem("t3code:theme-appearance-mode"));
+  return stored === "light" || stored === "dark"
+    ? stored
+    : stored === "system"
+      ? summary.colorScheme
+      : "dark";
+}
+const CANVAS = { dark: "rgb(10, 10, 10)", light: "rgb(192, 192, 192)" };
+/**
+ * From the first paint until the app is on screen the page shows one MAX loading screen on the
+ * theme's own canvas: no white, no unstyled text, no second look. The init script below records
+ * every distinct screen the root showed.
+ */
+async function checkBoot(expected, when) {
+  const boot = await page.evaluate(() => window.__maxBoot);
+  const screens = boot.screens.filter((screen) => screen.painted !== false);
+  const firstApp = screens.findIndex((screen) => !screen.boot);
+  const loading = firstApp < 0 ? screens : screens.slice(0, firstApp);
+  const row = { when, expected, htmlBackground: boot.htmlBackground, screens };
+  summary.boots.push(row);
+  assert(loading.length >= 1 && screens[0].boot, `${when}: first paint was not the loading screen`);
+  assert.equal(boot.htmlBackground, CANVAS[expected], `${when}: document background during boot`);
+  for (const screen of loading) {
+    assert.equal(screen.background, CANVAS[expected], `${when}: loading screen background`);
+    assert.equal(screen.text, loading[0].text, `${when}: loading screens differ`);
+    assert.equal(screen.text, "MAXConnecting…", `${when}: loading screen text`);
+  }
+  for (const screen of screens)
+    assert(
+      !/Connecting to MAX|INITIALIZING/.test(screen.text),
+      `${when}: unstyled loading text appeared`,
+    );
+  // After the app appears, a later loading screen (the app bundle's Suspense) must look the same.
+  for (const screen of screens.slice(firstApp < 0 ? screens.length : firstApp))
+    if (screen.boot) {
+      assert.equal(screen.background, CANVAS[expected], `${when}: later loading screen background`);
+      assert.equal(screen.text, "MAXConnecting…", `${when}: later loading screen text`);
+    }
+}
+/** Whether the window is laid out as a phone right now: the app's own media query. */
+async function phoneLayout() {
+  return page.evaluate((query) => matchMedia(query).matches, MAX_PHONE_LAYOUT_QUERY);
+}
+/**
+ * Focus ring: visible only after real keyboard use. `expectRing` names where the ring must be
+ * ("page" for the page being read, "none" after a tap).
+ */
+async function focusGate(name, expectRing) {
+  const seen = await page.evaluate(() => {
+    const ringed = (el) => {
+      const style = getComputedStyle(el);
+      return (
+        (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) ||
+        // T3's own buttons draw their ring as a box shadow; MAX turns it off.
+        (el.matches('[data-sidebar="trigger"]') && style.boxShadow !== "none")
+      );
+    };
+    const focused = [...document.querySelectorAll(":focus-visible")].filter(
+      (el) => el !== document.documentElement && el !== document.body,
+    );
+    const front = document.querySelector('[data-max-page][data-position="current"]');
+    return {
+      modality: document.documentElement.dataset.maxInput ?? null,
+      active: document.activeElement?.tagName + "." + (document.activeElement?.className || ""),
+      rings: focused.filter(ringed).map((el) => el.tagName + "." + el.className),
+      pageRing: front ? ringed(front) : false,
+    };
+  });
+  summary.focusRings.push({ name, expectRing, ...seen });
+  if (expectRing === "none") {
+    assert.equal(seen.modality, "pointer", `${name}: last input should be a pointer`);
+    assert.deepEqual(seen.rings, [], `${name}: a focus ring showed after touch`);
+    assert(!seen.pageRing, `${name}: the page showed a focus ring after touch`);
+  } else {
+    assert.equal(seen.modality, "keyboard", `${name}: last input should be the keyboard`);
+    assert(seen.pageRing, `${name}: the page being read must show the keyboard focus ring`);
+  }
+}
+/**
+ * The window's rows must stack without overlap or clipping, and the answer must keep most of the
+ * height: at least 120 px of page body even on a phone held sideways.
+ */
+async function layoutGate(label, { docked }) {
+  const measured = await page.evaluate(() => {
+    const rect = (selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height };
+    };
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      header: rect(".max-header"),
+      modeSwitch: rect(".max-segmented"),
+      question: rect(".max-user-turn"),
+      pageBody: rect('[data-max-page][data-position="current"] .max-page-body'),
+      pageActions: rect('[data-max-page][data-position="current"] .max-page-actions'),
+      nav: rect(".max-pages-nav"),
+      position: rect("[data-page-position]"),
+      composer: rect(".max-composer"),
+      send: rect('[aria-label="Send to council"]'),
+      coarse: matchMedia("(pointer: coarse)").matches,
+    };
+  });
+  const row = { label, docked, ...measured };
+  summary.layoutChecks.push(row);
+  const { viewport } = measured;
+  const inside = (name) => {
+    const r = measured[name];
+    assert(r, `${label}: missing ${name}`);
+    assert(
+      r.top >= -0.5 &&
+        r.left >= -0.5 &&
+        r.bottom <= viewport.height + 0.5 &&
+        r.right <= viewport.width + 0.5,
+      `${label}: ${name} is clipped by the viewport (${JSON.stringify(r)})`,
+    );
+  };
+  for (const name of [
+    "header",
+    "modeSwitch",
+    "question",
+    "pageBody",
+    "pageActions",
+    "nav",
+    "position",
+    "composer",
+    "send",
+  ])
+    inside(name);
+  assert(measured.modeSwitch.top >= 1, `${label}: the mode switch touches the top edge`);
+  const order = ["header", "question", "pageBody", "pageActions", "nav", "composer"];
+  for (let i = 1; i < order.length; i++)
+    assert(
+      measured[order[i]].top >= measured[order[i - 1]].bottom - 0.5,
+      `${label}: ${order[i]} overlaps ${order[i - 1]}`,
+    );
+  assert(
+    measured.pageBody.height >= 120,
+    `${label}: the answer body is only ${Math.round(measured.pageBody.height)} px tall`,
+  );
+  const panelVisible = await panel().isVisible();
+  assert.equal(
+    panelVisible,
+    docked,
+    `${label}: panel ${docked ? "must be" : "must not be"} docked`,
+  );
 }
 
 async function home() {
@@ -418,11 +579,31 @@ async function openPanel() {
     await expect(panel()).toBeVisible();
   }
 }
-async function closePanelIfDrawer() {
-  if (viewport.width < 768 || (await page.evaluate(() => innerWidth)) < 768) {
-    await page.keyboard.press("Escape");
-    await expect(panel()).toBeHidden();
-  }
+/**
+ * Closes an open drawer the way a person does: a finger on the drawer's own panel button (touch
+ * profile; on a phone the drawer covers the whole width, so there is no scrim to tap) or Escape
+ * (computer profile). Closing must only close the drawer: no page may turn underneath.
+ */
+async function closePanelIfDrawer(via = desktop ? "escape" : "tap") {
+  if (!(await phoneLayout())) return;
+  const positionBefore = await position()
+    .textContent()
+    .catch(() => null);
+  if (via === "tap") await panel().getByRole("button", { name: "Toggle main sidebar" }).tap();
+  else await page.keyboard.press("Escape");
+  await expect(panel()).toBeHidden();
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})));
+  });
+  const positionAfter = await position()
+    .textContent()
+    .catch(() => null);
+  (summary.drawerCloses ??= []).push({ via, positionBefore, positionAfter });
+  assert.equal(positionAfter, positionBefore, `Closing the drawer (${via}) must not turn a page`);
+}
+/** Choosing a conversation or New chat closes the drawer by itself; a docked panel stays. */
+async function expectDrawerClosedItself() {
+  if (await phoneLayout()) await expect(panel()).toBeHidden();
 }
 const pages = () => page.getByRole("region", { name: "Council answers", exact: true });
 const position = () => page.locator("[data-page-position]");
@@ -476,10 +657,19 @@ async function dragWithMouse(direction) {
 async function measureTurn(name, turn) {
   await page.evaluate(() => {
     window.__maxFrames = [];
+    window.__maxMotion = [];
     let last = performance.now();
     const start = last;
+    const front = document.querySelector('[data-max-page][data-position="current"]');
     const tick = (t) => {
       window.__maxFrames.push(t - last);
+      // Where the page being read actually is this frame, so a stalled turn cannot hide
+      // behind a healthy frame rate.
+      if (front)
+        window.__maxMotion.push([
+          Math.round(t - start),
+          Math.round(new DOMMatrix(getComputedStyle(front).transform).m41),
+        ]);
       last = t;
       if (t - start < 900) requestAnimationFrame(tick);
     };
@@ -487,18 +677,34 @@ async function measureTurn(name, turn) {
   });
   await turn();
   await page.waitForTimeout(950);
+  const motion = await page.evaluate(() => window.__maxMotion);
   const frames = (await page.evaluate(() => window.__maxFrames)).slice(1);
   const sorted = [...frames].sort((a, b) => a - b);
   const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
   const longest = sorted.at(-1) ?? 0;
   const over34 = frames.filter((f) => f > 34).length;
+  // The page's travel: when it first moved, when it last moved, and the longest pause between
+  // two frames in which it changed position while still more than 4 px from where it ended (the
+  // ease-out tail moves under a pixel a frame and is not a stall). A settle must not freeze.
+  const moving = motion.filter(([, x], i) => i > 0 && x !== motion[i - 1][1]);
+  const firstMoveMs = moving[0]?.[0] ?? null;
+  const lastMoveMs = moving.at(-1)?.[0] ?? null;
+  const finalX = motion.at(-1)?.[1] ?? 0;
+  const enRoute = moving.filter(([, x]) => Math.abs(x - finalX) > 4);
+  let longestPauseMs = 0;
+  for (let i = 1; i < enRoute.length; i++)
+    longestPauseMs = Math.max(longestPauseMs, enRoute[i][0] - enRoute[i - 1][0]);
   const row = {
     name,
     frames: frames.length,
     longestMs: +longest.toFixed(1),
     p95Ms: +p95.toFixed(1),
     over34,
-    pass: longest <= 80 && over34 <= 2,
+    firstMoveMs,
+    lastMoveMs,
+    longestPauseMs,
+    travelMs: firstMoveMs === null ? null : lastMoveMs - firstMoveMs,
+    pass: longest <= 80 && over34 <= 2 && longestPauseMs <= 150,
   };
   summary.pageTurns.push(row);
   return row;
@@ -518,6 +724,15 @@ try {
     process.env.PLAYWRIGHT_BROWSERS_PATH,
     "Set PLAYWRIGHT_BROWSERS_PATH to existing installed browsers (no download)",
   );
+  {
+    // The app decides phone/computer in JavaScript and in CSS; both must be the same query.
+    const css = await readFile(path.join(root, "apps/web/src/components/max/council.css"), "utf8");
+    assert(
+      css.includes(`@media ${MAX_PHONE_LAYOUT_QUERY} {`),
+      "council.css no longer repeats MAX_PHONE_LAYOUT_QUERY",
+    );
+    assert(!/@media \(max-width: 767px\) \{/.test(css), "council.css has a width-only phone query");
+  }
   if (!process.argv.includes("--skip-build"))
     await run("corepack", ["pnpm", "--filter", "@t3tools/web", "build"], {
       T3CODE_SINGLE_ORIGIN_DEV: "1",
@@ -616,6 +831,48 @@ try {
     summary.longTasks.push(duration),
   );
   await context.addInitScript(() => {
+    // Every distinct first child of #root, from the parser's boot shell to the app.
+    const record = { htmlBackground: null, screens: [] };
+    window.__maxBoot = record;
+    let lastFirst = null;
+    const snapshot = () => {
+      if (record.htmlBackground === null && document.body)
+        record.htmlBackground = getComputedStyle(document.documentElement).backgroundColor;
+      const first = document.getElementById("root")?.firstElementChild;
+      if (!first || first === lastFirst) return;
+      lastFirst = first;
+      const bootEl = first.matches("[data-max-boot]")
+        ? first
+        : first.querySelector("[data-max-boot]");
+      const screen = {
+        boot: bootEl !== null,
+        text: (first.textContent || "").trim().replace(/\s+/g, "").slice(0, 60),
+        background: null,
+      };
+      record.screens.push(screen);
+      // The head stylesheet blocks painting, not parsing: read the colour at the first frame
+      // after the bundle's stylesheet is in place, which is the colour actually painted.
+      const measure = () => {
+        // Replaced before a frame: never painted, so it is not a screen anyone saw.
+        if (!first.isConnected) {
+          screen.painted = false;
+          return;
+        }
+        const styled = [...document.styleSheets].some((sheet) =>
+          /\/assets\/.*\.css/.test(sheet.href || ""),
+        );
+        if (!styled) {
+          requestAnimationFrame(measure);
+          return;
+        }
+        screen.painted = true;
+        screen.background = getComputedStyle(bootEl ?? document.body).backgroundColor;
+      };
+      requestAnimationFrame(measure);
+    };
+    // Init scripts run before <html> exists, so observe the document node itself.
+    new MutationObserver(snapshot).observe(document, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", snapshot);
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries())
         if (entry.duration > 200) window.recordLongTask(entry.duration);
@@ -723,6 +980,10 @@ try {
   await step("login-page", async () => {
     await page.goto(base);
     await expect(page.getByRole("button", { name: "SIGN IN", exact: true })).toBeVisible();
+    // First visit: nothing stored, so MAX boots dark whatever the OS prefers.
+    await checkBoot("dark", "first-visit");
+    summary.coarsePointer = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+    assert.equal(summary.coarsePointer, !desktop, "Touch profile must report a coarse pointer");
   });
   assert.deepEqual(anonymousTraffic, [], "Authenticated traffic before MAX login");
   page.off("request", recordAnonymous);
@@ -748,6 +1009,8 @@ try {
     await page.getByLabel("PASSWORD", { exact: true }).fill("local-e2e-password");
     await page.getByRole("button", { name: "SIGN IN", exact: true }).click();
     await home();
+    // The sign-in form hands over to the app through the same loading screen.
+    await checkBoot("dark", "after-login");
   });
   await step("theme-toggle-persists", async () => {
     // Old MAX's light mode: a real light palette, remembered across reloads. A light run stays
@@ -952,7 +1215,7 @@ try {
     await openPanel();
     await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
     await expect(page).toHaveURL(new RegExp("[?&]round=" + summary.seededRound.id));
-    await closePanelIfDrawer();
+    await expectDrawerClosedItself();
     await expect(pages()).toBeVisible();
     await expectPosition("1 of 4");
     assert.deepEqual(await pageOrder(), ["c1", "c0", "c2", "synthesis"]);
@@ -971,11 +1234,29 @@ try {
     await measureTurn(desktop ? "mouse-drag-back" : "touch-swipe-back", () => turn("right"));
     await expectPosition("1 of 4");
     assert(first.frames > 20, "Frame sampler saw too few frames during the turn");
+    if (!desktop) {
+      // A tap on the page control, then on the page itself: no ring anywhere.
+      await page.getByRole("button", { name: "Next page" }).last().tap();
+      await expectPosition("2 of 4");
+      await focusGate("after-tap-next", "none");
+      await page.getByRole("button", { name: "Previous page" }).tap();
+      await expectPosition("1 of 4");
+      await focusGate("after-tap-previous", "none");
+      await page.screenshot({
+        path: path.join(artifacts, "focus-after-touch.png"),
+        fullPage: true,
+      });
+    } else await focusGate("after-mouse-drag", "none");
   });
   await step("turn-by-keyboard-to-synthesis", async () => {
     await pages().focus();
     await measureTurn("keyboard-forward", () => page.keyboard.press("ArrowRight"));
     await expectPosition("2 of 4");
+    await focusGate("after-keyboard-turn", "page");
+    await page.screenshot({
+      path: path.join(artifacts, "focus-after-keyboard.png"),
+      fullPage: true,
+    });
     await page.keyboard.press("ArrowRight");
     await expectPosition("3 of 4");
     assert.equal(
@@ -1040,7 +1321,7 @@ try {
   await step("new-chat-from-panel", async () => {
     await openPanel();
     await panel().getByRole("button", { name: "New chat", exact: true }).click();
-    await closePanelIfDrawer();
+    await expectDrawerClosedItself();
     await home();
   });
   if (!noRound) {
@@ -1366,17 +1647,17 @@ try {
     await step("recent-round-reopen", async () => {
       await openPanel();
       await panel().getByRole("button", { name: "New chat", exact: true }).click();
-      await closePanelIfDrawer();
+      await expectDrawerClosedItself();
       await home();
       await openPanel();
       await panel().getByRole("button", { name: completed.prompt }).click();
-      await closePanelIfDrawer();
+      await expectDrawerClosedItself();
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
       await expect(pages()).toBeVisible();
       await expectPosition("1 of 3");
       await openPanel();
       await panel().getByRole("button", { name: "New chat", exact: true }).click();
-      await closePanelIfDrawer();
+      await expectDrawerClosedItself();
       await home();
     });
   }
@@ -1436,7 +1717,7 @@ try {
       const label = `${size.width}x${size.height}`;
       await page.setViewportSize(size);
       await home();
-      const docked = size.width >= 768;
+      const docked = !isPhoneLayout({ ...size, coarsePointer: summary.coarsePointer });
       if (docked) await expect(panel()).toBeVisible();
       else await expect(panel()).toBeHidden();
       await gates(`viewport-${label}-home`);
@@ -1445,11 +1726,18 @@ try {
       await expect(panel()).toBeVisible();
       await gates(`viewport-${label}-panel`);
       await page.screenshot({ path: path.join(artifacts, `viewport-${label}-panel.png`) });
-      await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
       if (!docked) {
-        await page.keyboard.press("Escape");
-        await expect(panel()).toBeHidden();
+        // Change of mind: close the open drawer with its own button (touch) or Escape (computer),
+        // then by Escape on every profile, reopening in between. Focus returns to the toggle each
+        // time; no tooltip may be left behind and no page may turn.
+        await closePanelIfDrawer();
+        await gates(`viewport-${label}-drawer-closed`);
+        await openPanel();
+        await closePanelIfDrawer("escape");
+        await openPanel();
       }
+      await panel().getByRole("button", { name: summary.seededRound.prompt }).click();
+      await expectDrawerClosedItself();
       await expect(pages()).toBeVisible();
       await expectPosition("1 of 4");
       const composer = await page
@@ -1459,6 +1747,7 @@ try {
         composer && composer.y + composer.height <= size.height + 1,
         `Composer must stay inside the ${label} viewport`,
       );
+      await layoutGate(`viewport-${label}`, { docked });
       await gates(`viewport-${label}-pages`);
       await page.screenshot({ path: path.join(artifacts, `viewport-${label}-pages.png`) });
       await openModelWindow();
@@ -1472,10 +1761,7 @@ try {
       await closeModelWindow();
       await openPanel();
       await panel().getByRole("button", { name: "New chat", exact: true }).click();
-      if (!docked) {
-        await page.keyboard.press("Escape");
-        await expect(panel()).toBeHidden();
-      }
+      await expectDrawerClosedItself();
       await home();
     }
     await page.setViewportSize(viewport);
@@ -1501,7 +1787,9 @@ try {
       g.truncatedTitles ||
       g.smallTargets.length ||
       g.contrast.length ||
-      g.transparentPanels.length,
+      g.iconContrast.length ||
+      g.transparentPanels.length ||
+      (!desktop && g.tooltips),
   );
   // Ten >200ms tasks across cold boots and a complete walkthrough allow startup work,
   // but fail sustained main-thread stalls. Keep raw durations for comparison across machines.
@@ -1531,6 +1819,12 @@ try {
   await writeFile(path.join(artifacts, "network-failures.json"), JSON.stringify(network, null, 2));
   await writeFile(path.join(artifacts, "console.json"), JSON.stringify(consoleLog, null, 2));
   await writeFile(path.join(artifacts, "summary.json"), JSON.stringify(summary, null, 2));
+  // The evidence copy was taken before the summary existed; it needs the summary too.
+  if (summary.evidence)
+    await NodeFSP.copyFile(
+      path.join(artifacts, "summary.json"),
+      path.join(summary.evidence, "summary.json"),
+    );
   console.log(
     JSON.stringify(
       {

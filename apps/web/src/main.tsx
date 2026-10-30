@@ -7,12 +7,17 @@ import "./index.css";
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
 import { isElectron } from "./env";
 import { MaxAuthGate } from "./components/max/MaxAuthGate";
+import { MaxBootScreen } from "./components/max/MaxBootScreen";
+import { installMaxInputModality } from "./components/max/maxInputModality";
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
 
 import { APP_BASE_NAME } from "./branding";
 import { installMaxSessionTransport } from "./components/max/maxSessionTransport";
 
-if (APP_BASE_NAME === "MAX") installMaxSessionTransport();
+if (APP_BASE_NAME === "MAX") {
+  installMaxSessionTransport();
+  installMaxInputModality();
+}
 
 const AuthenticatedApp = lazy(() => import("./MaxAuthenticatedApp"));
 
@@ -30,7 +35,7 @@ window.addEventListener("vite:preloadError", (event) => {
 
 const app = (
   <MaxAuthGate>
-    <Suspense fallback={<p role="status">Connecting to MAX…</p>}>
+    <Suspense fallback={<MaxBootScreen />}>
       <AuthenticatedApp />
     </Suspense>
   </MaxAuthGate>

@@ -12,7 +12,11 @@ const MODE_OPTIONS: ReadonlyArray<{ readonly mode: MaxMode; readonly label: stri
   { mode: "agent", label: "Agent" },
 ];
 
-/** MAX top bar. T3's header handles the titlebar drag area, safe area and sidebar toggle inset. */
+/**
+ * MAX top bar. T3's header handles the titlebar drag area, safe area and sidebar toggle inset.
+ * When the side panel is docked and open its header carries the wordmark, so this one hides its
+ * own (see `council.css`): one MAX on screen.
+ */
 export function MaxHeader({
   mode,
   onModeChange,
@@ -26,7 +30,7 @@ export function MaxHeader({
     <WorkspacePageHeader electron={isElectron} className="max-header gap-2">
       <div className="flex min-w-0 flex-1 items-baseline gap-3">
         <span className="max-wordmark shrink-0 text-lg font-bold">MAX</span>
-        <span className="hidden truncate text-xs text-(--max-muted) md:inline">
+        <span className="max-desk-only truncate text-xs text-(--max-muted)">
           Multi-Model AI Console
         </span>
       </div>
@@ -56,7 +60,7 @@ export function MaxHeader({
         aria-label="Sign out"
       >
         <LogOutIcon aria-hidden="true" className="size-4" />
-        <span className="max-md:sr-only text-xs">Sign out</span>
+        <span className="max-desk-only text-xs">Sign out</span>
       </button>
     </WorkspacePageHeader>
   );

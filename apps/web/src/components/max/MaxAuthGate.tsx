@@ -1,4 +1,5 @@
 import { resumeMaxSessionTransport, stopMaxSessionServices } from "./maxSessionTransport";
+import { MaxBootScreen } from "./MaxBootScreen";
 import { MaxThemeToggleButton } from "./MaxThemeToggleButton";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
@@ -172,13 +173,8 @@ export function MaxAuthGate({ children }: { children: ReactNode }) {
       });
   }
 
-  if (loading) {
-    return (
-      <div className="max-scope flex min-h-screen items-center justify-center bg-(--max-black) font-mono">
-        <p className="text-sm tracking-widest text-(--max-muted)">INITIALIZING...</p>
-      </div>
-    );
-  }
+  // The same screen index.html painted before React: no second loading look.
+  if (loading) return <MaxBootScreen />;
 
   if (user) {
     return (

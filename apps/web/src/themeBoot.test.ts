@@ -371,12 +371,32 @@ describe("index.html boot script", () => {
     expect(boot.metaContent).toBe(DEFAULT_DARK_CHROME);
   });
 
-  it("follows the OS appearance when storage is unavailable", () => {
+  // MAX's runtime falls back to its dark default when the theme cannot be read (useTheme keeps
+  // the read failure and serves DEFAULT_THEME_SNAPSHOT); the first paint must not disagree.
+  it("starts dark when storage is unavailable, like the MAX runtime", () => {
     const light = runBootScript({ storageThrows: true, prefersDark: false });
-    expect(light.isDark).toBe(false);
+    expect(light.isDark).toBe(true);
     expect(light.themeId).toBeUndefined();
+    expect(light.backgroundColor).toBe("#0a0a0a");
 
     const dark = runBootScript({ storageThrows: true, prefersDark: true });
     expect(dark.isDark).toBe(true);
+  });
+
+  it("starts dark with nothing stored, whatever the OS prefers, on MAX's own canvas", () => {
+    for (const prefersDark of [false, true]) {
+      const boot = runBootScript({ storage: {}, prefersDark });
+      expect(boot.isDark).toBe(true);
+      expect(boot.themeId).toBeUndefined();
+      expect(boot.backgroundColor).toBe("#0a0a0a");
+      expect(boot.metaContent).toBe("#0a0a0a");
+    }
+    const light = runBootScript({
+      storage: { [THEME_APPEARANCE_MODE_STORAGE_KEY]: "light" },
+      prefersDark: true,
+    });
+    expect(light.isDark).toBe(false);
+    expect(light.backgroundColor).toBe("#c0c0c0");
+    expect(light.metaContent).toBe("#c0c0c0");
   });
 });

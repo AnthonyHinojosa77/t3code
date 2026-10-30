@@ -1,4 +1,106 @@
-/* MAX council: one chat window, answers as pages. Motion touches transform and opacity only. */
+/* MAX council: one chat window, answers as pages. Motion touches transform and opacity only.
+
+   Layout split. A phone is a narrow window, or a coarse-pointer window with little height (a
+   phone on its side); everything else is a computer. The two queries below are each other's
+   complement and the phone one is also `MAX_PHONE_LAYOUT_QUERY` in maxLayout.ts (tested):
+     PHONE: (max-width: 767px), (pointer: coarse) and (max-height: 500px)
+     DESK:  (min-width: 768px) and (min-height: 501px), (min-width: 768px) and (pointer: fine),
+            (min-width: 768px) and (pointer: none) */
+
+/* ---- Boot: the one loading screen -------------------------------------------------------- */
+/* index.html paints this markup before any JavaScript runs; the stylesheet link in its head
+   is render-blocking, so the first paint already has these rules. MaxBootScreen renders the
+   same markup for the sign-in check and the app bundle's Suspense fallback, so nothing
+   changes between them. Colours are MAX's own tokens; html/body get the same canvas inline in
+   index.html so even a failed stylesheet shows no white. */
+.max-boot {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  background: #c0c0c0;
+  color: #000000;
+  font-family: "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+html.dark .max-boot {
+  background: #0a0a0a;
+  color: #e0e0e0;
+  font-family:
+    "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.max-boot-mark {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+  color: #000080;
+}
+
+html.dark .max-boot-mark {
+  color: #00ff41;
+  text-shadow:
+    0 0 4px rgba(0, 255, 65, 0.6),
+    0 0 8px rgba(0, 255, 65, 0.3),
+    0 0 16px rgba(0, 255, 65, 0.1);
+}
+
+.max-boot-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  color: #3a3a3a;
+}
+
+html.dark .max-boot-status {
+  color: #949494;
+}
+
+.max-boot-bar {
+  width: 120px;
+  height: 2px;
+  overflow: hidden;
+  background: rgba(0, 0, 128, 0.18);
+}
+
+html.dark .max-boot-bar {
+  background: rgba(0, 255, 65, 0.18);
+}
+
+.max-boot-bar span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: #000080;
+  transform: translateX(-100%);
+  animation: max-boot-sweep 1.4s ease-in-out infinite;
+}
+
+html.dark .max-boot-bar span {
+  background: #00ff41;
+}
+
+@keyframes max-boot-sweep {
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .max-boot-bar span {
+    width: 100%;
+    opacity: 0.5;
+    transform: none;
+    animation: none;
+  }
+}
 
 /* ---- Shared controls ------------------------------------------------------------------- */
 .max-scope .max-button,
@@ -78,9 +180,29 @@
   color: var(--max-light);
   box-shadow: var(--max-bevel-inset);
 }
-.max-scope :is(button, select, input, textarea, [role="region"]):focus-visible {
-  outline: 2px solid var(--max-green);
-  outline-offset: 2px;
+/* The page region's keyboard ring sits on the page being read, not around the whole stack. */
+html[data-max-input="keyboard"] .max-scope .max-pages:focus-visible {
+  outline: none;
+}
+html[data-max-input="keyboard"]
+  .max-scope
+  .max-pages:focus-visible
+  > .max-page[data-position="current"] {
+  outline: 2px solid var(--max-focus);
+  outline-offset: -2px;
+}
+/* Shown and hidden by layout, not by width alone (see the queries at the top). */
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+  .max-scope .max-desk-only {
+    display: none;
+  }
+}
+@media (min-width: 768px) and (min-height: 501px),
+  (min-width: 768px) and (pointer: fine),
+  (min-width: 768px) and (pointer: none) {
+  .max-scope .max-phone-only {
+    display: none;
+  }
 }
 .max-scope .max-field-label {
   display: flex;
@@ -128,9 +250,39 @@
   background: rgb(255 255 255 / 18%);
   color: var(--max-titlebar-text);
 }
-/* T3's fixed sidebar trigger sits over the title bar; keep it readable on navy. */
-:root:not(.dark):has(.max-header) [data-sidebar-control] button {
+/* T3's fixed sidebar trigger floats over the title bar when the panel is closed (and always on
+   phones), so its icon must be white on navy there. With the panel docked it floats over the
+   panel's chrome-gray header and keeps T3's dark icon. The icon takes its colour from the
+   button's --control-icon-color, not from `color`. */
+:root:not(.dark):has(.max-header)
+  [data-slot="sidebar-wrapper"]:not([data-sidebar-state="expanded"])
+  [data-sidebar-control]
+  button {
+  --control-icon-color: var(--max-titlebar-text);
   color: var(--max-titlebar-text);
+}
+:root:not(.dark):has(.max-header)
+  [data-slot="sidebar-wrapper"]:not([data-sidebar-state="expanded"])
+  [data-sidebar-control]
+  button:hover {
+  background: rgb(255 255 255 / 18%);
+}
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+  :root:not(.dark):has(.max-header) [data-sidebar-control] button {
+    --control-icon-color: var(--max-titlebar-text);
+    color: var(--max-titlebar-text);
+  }
+  :root:not(.dark):has(.max-header) [data-sidebar-control] button:hover {
+    background: rgb(255 255 255 / 18%);
+  }
+}
+/* One wordmark: while the docked panel is open its header carries MAX, so the window's does not. */
+@media (min-width: 768px) and (min-height: 501px),
+  (min-width: 768px) and (pointer: fine),
+  (min-width: 768px) and (pointer: none) {
+  [data-slot="sidebar-wrapper"][data-sidebar-state="expanded"] .max-header .max-wordmark {
+    display: none;
+  }
 }
 .max-scope .max-segmented {
   display: flex;
@@ -159,6 +311,15 @@
   .max-scope .max-header {
     --workspace-topbar-height: 44px;
   }
+  /* The mode switch keeps its 40 px targets and its own surface but drops the frame around
+     them, so it sits 2 px inside the 44 px bar instead of touching its edges. */
+  .max-scope .max-segmented {
+    padding: 0;
+    border: 0;
+  }
+  .max-scope .max-segment {
+    padding: 0 0.6rem;
+  }
 }
 
 /* ---- The window ----------------------------------------------------------------------- */
@@ -184,91 +345,9 @@
   overflow: hidden;
   padding: 0 clamp(0.75rem, 3vw, 1.5rem);
 }
-/* A phone held sideways: keep the question to two lines and give the height to the page. */
-@media (max-height: 500px) {
-  .max-transcript {
-    gap: 0.4rem;
-    padding-top: 0.4rem;
-  }
-  .max-user-turn {
-    padding: 0.4rem 0.75rem;
-  }
-  .max-user-text {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-line-clamp: 1;
-    -webkit-box-orient: vertical;
-    font-size: 0.8125rem;
-    white-space: normal;
-  }
-  /* One composer row: the text field sits between the plus/model controls and mic/send. */
-  .max-composer .max-composer-field {
-    flex-direction: row;
-    align-items: center;
-    padding-right: 0.25rem;
-  }
-  .max-scope .max-composer-field > .max-composer-input {
-    flex: 1 1 0;
-    width: auto;
-    min-width: 0;
-    order: 2;
-    min-height: 40px;
-    max-height: 80px;
-    padding: 0.5rem 0.5rem;
-  }
-  .max-composer .max-composer-field > .max-attachments {
-    order: 1;
-    padding: 0 0 0 0.5rem;
-  }
-  .max-composer .max-composer-field > .max-composer-row {
-    display: contents;
-  }
-  .max-composer .max-composer-row > [aria-label="Add files or settings"],
-  .max-scope .max-composer-row > .max-model-button {
-    order: 1;
-  }
-  .max-scope .max-composer-row > .max-model-button {
-    max-width: 14rem;
-  }
-  .max-composer .max-composer-row > .flex-1 {
-    display: none;
-  }
-  .max-scope .max-composer-row > [aria-pressed],
-  .max-scope .max-composer-row > .max-send {
-    order: 3;
-  }
-  .max-user-meta,
-  .max-user-files {
-    display: none;
-  }
-  .max-pages {
-    min-height: 7rem;
-  }
-  .max-page-header {
-    padding: 0.4rem 0.75rem;
-  }
-  .max-page-actions {
-    padding: 0.35rem 0.75rem;
-  }
-  .max-composer {
-    padding-top: 0.25rem;
-    padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
-  }
-  .max-scope .max-composer-input {
-    min-height: 40px;
-    padding-top: 0.5rem;
-  }
-  .max-composer-row {
-    padding-bottom: 0.25rem;
-  }
-  .max-pages-nav {
-    gap: 0.25rem;
-  }
-  .max-pages-dots {
-    display: none;
-  }
-}
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 501px),
+  (min-width: 768px) and (pointer: fine),
+  (min-width: 768px) and (pointer: none) {
   .max-shell {
     padding: 0 1rem;
   }
@@ -421,6 +500,9 @@
   flex: 1 1 auto;
   min-height: min(14rem, 45dvh);
   overflow: hidden;
+  /* A turning page tilts slightly about its spine (left edge); this gives the tilt depth. */
+  perspective: 1400px;
+  perspective-origin: 50% 50%;
   /* Vertical pans scroll the page; horizontal pans turn it. */
   touch-action: pan-y pinch-zoom;
   user-select: text;
@@ -445,10 +527,27 @@
   overflow: hidden;
   /* Resting place; the stack animates inline transforms over this. */
   transform: translateX(calc(min(var(--k, 0), 0) * 100% + var(--peek, 0px)));
+  transform-origin: 0 50%;
   backface-visibility: hidden;
 }
 .max-page[data-position="behind"] {
   background: var(--max-page-edge);
+}
+/* The shadow a lifting page casts on the page under it. Only its opacity ever changes. */
+.max-page-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(90deg, rgb(0 0 0 / 55%), rgb(0 0 0 / 18%) 40%, transparent 72%);
+}
+:root:not(.dark) .max-page-shade {
+  background: linear-gradient(90deg, rgb(0 0 0 / 32%), rgb(0 0 0 / 10%) 40%, transparent 72%);
+}
+.max-pages[data-dragging] .max-page-shade,
+.max-pages[data-turning] .max-page-shade {
+  will-change: opacity;
 }
 .max-pages[data-dragging] .max-page,
 .max-pages[data-turning] .max-page {
@@ -565,7 +664,7 @@
 .max-pages-dots span[data-active] {
   background: var(--max-green);
 }
-@media (pointer: coarse) and (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
   .max-pages-nav .max-icon-button {
     opacity: 0.8;
   }
@@ -714,6 +813,14 @@
 }
 
 /* Plus menu and model window portals */
+/* T3's favourite star is amber, which is 1.9:1 on the light picker's paper; MAX's light palette
+   draws it in its navy accent instead. Dark keeps T3's amber (9:1 on the dark panel). */
+:root:not(.dark):has(.max-scope)
+  :is([data-slot="popover-popup"], [data-slot="menu-popup"], [role="dialog"])
+  button[aria-label$="favorites"]
+  svg {
+  color: var(--max-green);
+}
 .max-menu [role="menuitem"] {
   min-height: 40px;
   gap: 0.6rem;
@@ -921,7 +1028,9 @@
   margin-left: calc(var(--workspace-controls-left) + 1px - env(safe-area-inset-left) - 0.75rem);
 }
 /* On computers T3's fixed sidebar toggle floats over the panel's top-left corner. */
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 501px),
+  (min-width: 768px) and (pointer: fine),
+  (min-width: 768px) and (pointer: none) {
   .max-panel-header {
     padding-left: calc(
       var(--workspace-controls-left) + var(--workspace-titlebar-control-size, 2rem) + 0.75rem
@@ -1017,4 +1126,107 @@
 }
 .max-scope .max-panel-footer-button:disabled {
   color: var(--max-muted);
+}
+
+/* ---- A phone held sideways ------------------------------------------------------------------
+   Last in the file on purpose: these override base rules of equal specificity above. The question
+   becomes one quiet line, every row tightens, and the page takes the height. */
+@media (max-height: 500px) {
+  .max-transcript {
+    gap: 0.3rem;
+    padding-top: 0.3rem;
+  }
+  .max-user-turn {
+    align-self: stretch;
+    max-width: none;
+    padding: 0.25rem 0.6rem;
+  }
+  .max-user-text {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    white-space: normal;
+  }
+  .max-pages-frame {
+    gap: 0.25rem;
+  }
+  .max-page-title {
+    font-size: 0.75rem;
+  }
+  .max-page-body {
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+  /* One composer row: the text field sits between the plus/model controls and mic/send. */
+  .max-composer .max-composer-field {
+    flex-direction: row;
+    align-items: center;
+    padding-right: 0.25rem;
+  }
+  .max-scope .max-composer-field > .max-composer-input {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    order: 2;
+    min-height: 40px;
+    max-height: 80px;
+    padding: 0.5rem 0.5rem;
+  }
+  .max-composer .max-composer-field > .max-attachments {
+    order: 1;
+    padding: 0 0 0 0.5rem;
+  }
+  .max-composer .max-composer-field > .max-composer-row {
+    display: contents;
+  }
+  .max-composer .max-composer-row > [aria-label="Add files or settings"],
+  .max-scope .max-composer-row > .max-model-button {
+    order: 1;
+  }
+  .max-scope .max-composer-row > .max-model-button {
+    max-width: 14rem;
+  }
+  .max-composer .max-composer-row > .flex-1 {
+    display: none;
+  }
+  .max-scope .max-composer-row > [aria-pressed],
+  .max-scope .max-composer-row > .max-send {
+    order: 3;
+  }
+  .max-user-meta,
+  .max-user-files {
+    display: none;
+  }
+  .max-pages {
+    min-height: 7rem;
+  }
+  .max-page-header {
+    padding: 0.3rem 0.75rem;
+  }
+  .max-page-actions {
+    gap: 0.35rem;
+    padding: 0.25rem 0.75rem;
+  }
+  .max-composer {
+    padding-top: 0.25rem;
+    padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
+  }
+  .max-scope .max-composer-input {
+    min-height: 40px;
+    padding-top: 0.5rem;
+  }
+  .max-composer-row {
+    padding-bottom: 0.25rem;
+  }
+  .max-pages-nav {
+    gap: 0.25rem;
+  }
+  .max-pages-dots {
+    display: none;
+  }
 }

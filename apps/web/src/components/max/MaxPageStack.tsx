@@ -21,6 +21,10 @@ const TURN_FRACTION = 0.25;
 const TURN_VELOCITY = 0.4;
 const RUBBER_BAND = 0.3;
 const EASING = "cubic-bezier(0.22, 0.9, 0.3, 1)";
+/** How far the moving page tilts about its spine at the middle of a turn. */
+const LIFT_DEG = 12;
+/** Keyframes sampled along a settle so the tilt and shadow rise and fall with the slide. */
+const SETTLE_SAMPLES = 9;
 
 function peek(k: number): number {
   return k <= 0 ? 0 : Math.min(k, PEEK_PAGES) * PEEK_STEP_PX;
@@ -44,6 +48,38 @@ export function turningX(k: number, width: number, progress: number, canTurn: bo
   if (!canTurn) return from + progress * width * RUBBER_BAND;
   const to = restingX(progress < 0 ? k - 1 : k + 1, width);
   return from + (to - from) * Math.abs(progress);
+}
+
+/** The page moving over the stack: the front page going forward, the previous one coming back. */
+export function liftingPage(progress: number): -1 | 0 {
+  return progress > 0 ? -1 : 0;
+}
+
+/** The page under the moving one; it carries the moving page's shadow. */
+export function shadedPage(progress: number): 0 | 1 {
+  return progress > 0 ? 0 : 1;
+}
+
+/**
+ * How far page `k` is lifted off the stack, 0..1: flat at rest at either end of a turn, highest
+ * halfway, and only ever the moving page. Rubber-banding at the ends lifts nothing.
+ */
+export function lift(k: number, progress: number, canTurn: boolean): number {
+  if (!canTurn || progress === 0 || k !== liftingPage(progress)) return 0;
+  const value = Math.sin(Math.PI * Math.min(1, Math.abs(progress)));
+  return value < 1e-6 ? 0 : value;
+}
+
+/** The inline transform for page `k` mid-turn: the slide, plus a tilt about the spine for the moving page. */
+export function pageTransform(
+  k: number,
+  width: number,
+  progress: number,
+  canTurn: boolean,
+): string {
+  const x = `translateX(${turningX(k, width, progress, canTurn)}px)`;
+  const tilt = lift(k, progress, canTurn);
+  return tilt === 0 ? x : `${x} rotateY(${(-LIFT_DEG * tilt).toFixed(3)}deg)`;
 }
 
 export function settleDecision(input: {
@@ -80,6 +116,18 @@ function reducedMotion(): boolean {
     typeof window.matchMedia === "function" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
+}
+
+function shadeOf(page: HTMLElement): HTMLElement | null {
+  return page.querySelector<HTMLElement>(":scope > .max-page-shade");
+}
+
+/** Clears the inline motion so the page sits where its CSS variables put it. */
+function restPage(page: HTMLElement): void {
+  page.style.transform = "";
+  page.style.opacity = "";
+  const shade = shadeOf(page);
+  if (shade) shade.style.opacity = "";
 }
 
 function isTextTarget(target: EventTarget | null): boolean {
@@ -123,10 +171,7 @@ export function MaxPageStack({
     root.dataset.pageCount = String(count);
     for (const animation of animations.current) animation.cancel();
     animations.current = [];
-    for (const page of root.querySelectorAll<HTMLElement>("[data-max-page]")) {
-      page.style.transform = "";
-      page.style.opacity = "";
-    }
+    for (const page of root.querySelectorAll<HTMLElement>("[data-max-page]")) restPage(page);
     settling.current = false;
     root.removeAttribute("data-turning");
   }, [index, count]);
@@ -135,9 +180,13 @@ export function MaxPageStack({
 
   const positionPages = (progress: number, width: number) => {
     const canTurn = progress < 0 ? index < count - 1 : index > 0;
+    const shaded = shadedPage(progress);
+    const shadow = lift(liftingPage(progress), progress, canTurn);
     pageElements().forEach((page) => {
       const k = Number(page.dataset.k);
-      page.style.transform = `translateX(${turningX(k, width, progress, canTurn)}px)`;
+      page.style.transform = pageTransform(k, width, progress, canTurn);
+      const shade = shadeOf(page);
+      if (shade) shade.style.opacity = String(k === shaded ? shadow : 0);
     });
   };
 
@@ -149,10 +198,7 @@ export function MaxPageStack({
       if (delta === 0) {
         for (const animation of animations.current) animation.cancel();
         animations.current = [];
-        for (const page of elements) {
-          page.style.transform = "";
-          page.style.opacity = "";
-        }
+        for (const page of elements) restPage(page);
         settling.current = false;
         rootRef.current?.removeAttribute("data-turning");
         setTurning(false);
@@ -185,20 +231,44 @@ export function MaxPageStack({
       return;
     }
     const canTurn = fromProgress < 0 ? index < count - 1 : index > 0;
-    const remaining = Math.abs((delta === 0 ? 0 : -delta) - fromProgress) * width;
+    // Progress at the end of the settle: back to rest, or a full turn in the chosen direction.
+    const endProgress = delta === 0 ? 0 : -delta;
+    const remaining = Math.abs(endProgress - fromProgress) * width;
     const duration = settleDuration(Math.max(remaining, width * 0.1), velocity);
-    const pending = elements.map((page) => {
+    const options = { duration, easing: EASING, fill: "forwards" as const };
+    // Sampled keyframes: the slide is linear in progress, the lift rises and falls with it.
+    const samples = Array.from(
+      { length: SETTLE_SAMPLES },
+      (_, i) =>
+        [
+          i / (SETTLE_SAMPLES - 1),
+          fromProgress + (endProgress - fromProgress) * (i / (SETTLE_SAMPLES - 1)),
+        ] as const,
+    );
+    const pending = elements.flatMap((page) => {
       const k = Number(page.dataset.k);
-      const from = turningX(k, width, fromProgress, canTurn);
-      const to = restingX(k - delta, width);
-      return page.animate(
-        [{ transform: `translateX(${from}px)` }, { transform: `translateX(${to}px)` }],
-        {
-          duration,
-          easing: EASING,
-          fill: "forwards",
-        },
-      );
+      const list = [
+        page.animate(
+          samples.map(([offset, progress]) => ({
+            offset,
+            transform: pageTransform(k, width, progress, canTurn),
+          })),
+          options,
+        ),
+      ];
+      const shade = shadeOf(page);
+      if (shade)
+        list.push(
+          shade.animate(
+            samples.map(([offset, progress]) => ({
+              offset,
+              opacity:
+                k === shadedPage(progress) ? lift(liftingPage(progress), progress, canTurn) : 0,
+            })),
+            options,
+          ),
+        );
+      return list;
     });
     animations.current = pending;
     void Promise.all(pending.map((animation) => animation.finished.catch(() => {}))).then(finish);
@@ -410,6 +480,7 @@ export function MaxPageStack({
               }
             >
               {renderPage(page, k === 0)}
+              <div className="max-page-shade" aria-hidden="true" />
             </article>
           );
         })}

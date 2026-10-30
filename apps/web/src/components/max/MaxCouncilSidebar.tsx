@@ -44,7 +44,7 @@ export function MaxCouncilSidebar() {
   return (
     <div className="max-scope max-panel">
       <div className="max-panel-header">
-        <div className="max-panel-trigger md:hidden">
+        <div className="max-panel-trigger max-phone-only">
           <SidebarTrigger variant="ghost" aria-label="Toggle main sidebar" />
         </div>
         <span className="max-wordmark text-base font-bold">MAX</span>

@@ -15,22 +15,24 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
       (() => {
-        const LIGHT_BACKGROUND = "#ffffff";
-        const DARK_BACKGROUND = "#000000";
+        // MAX's own canvas colours (see styles/max-terminal.css): the page is this colour from
+        // the first paint, so no white flashes before the app's stylesheet arrives.
+        const LIGHT_BACKGROUND = "#c0c0c0";
+        const DARK_BACKGROUND = "#0a0a0a";
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
         const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
         const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
         const SPLASH_COLORS = {
           light: {
-            background: "#ffffff",
-            foreground: "#262626",
-            accent: "#4f46e5",
+            background: "#c0c0c0",
+            foreground: "#000000",
+            accent: "#000080",
           },
           dark: {
-            background: "#000000",
-            foreground: "#f5f5f5",
-            accent: "#818cf8",
+            background: "#0a0a0a",
+            foreground: "#e0e0e0",
+            accent: "#00ff41",
           },
         };
         // These are the runtime defaults used to complete a custom palette
@@ -243,7 +245,8 @@
             storedTheme === "dark" ||
             storedTheme === "system" ||
             themeModes !== null;
-          const theme = isKnownTheme && storedTheme ? storedTheme : "system";
+          // With nothing stored MAX starts dark (useTheme's MAX default), not with the OS.
+          const theme = isKnownTheme && storedTheme ? storedTheme : "dark";
           const isThemed = isKnownTheme && themeModes !== null;
           const baseAppearance = customTheme ? customTheme.appearance : "light";
           const systemMode = prefersDark ? "dark" : "light";
@@ -367,19 +370,24 @@
               : isDark
                 ? DARK_BACKGROUND
                 : LIGHT_BACKGROUND;
-          document.documentElement.style.backgroundColor = chromeColor;
+          // With a T3 theme chosen (Agent mode's look) the document keeps that theme's chrome,
+          // as the runtime will; otherwise it is MAX's own canvas from the first paint.
+          const maxBackground = effectiveIsThemed
+            ? chromeColor
+            : isDark
+              ? DARK_BACKGROUND
+              : LIGHT_BACKGROUND;
+          document.documentElement.style.backgroundColor = maxBackground;
           if (hasSelection) {
             const splashColors = customSplash ?? builtInSplash ?? fallbackSplash;
             for (const [name, value] of Object.entries(splashColors)) {
               document.documentElement.style.setProperty(`--boot-${name}`, value);
             }
           }
-          setThemeColor(chromeColor);
+          setThemeColor(maxBackground);
         } catch {
-          let prefersDark = true;
-          try {
-            prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          } catch {}
+          // Storage unavailable: MAX's first-visit default is dark.
+          const prefersDark = true;
           delete document.documentElement.dataset.themeId;
           delete document.documentElement.dataset.themeSelected;
           document.documentElement.classList.toggle("dark", prefersDark);
@@ -398,16 +406,20 @@
         margin: 0;
       }
 
+      /* MAX's light palette is old MAX's Windows 98 look; dark is the terminal. These match
+         --max-black, --max-light, --max-muted, --max-green and --max-font in max-terminal.css. */
       body {
-        background: #ffffff;
-        color: #262626;
+        background: #c0c0c0;
+        color: #000000;
         font-family:
-          -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", system-ui, sans-serif;
+          "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Geneva, Verdana, sans-serif;
       }
 
       html.dark body {
-        background: #000000;
-        color: #f5f5f5;
+        background: #0a0a0a;
+        color: #e0e0e0;
+        font-family:
+          "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
 
       #boot-shell {
@@ -421,27 +433,6 @@
         color: inherit;
       }
 
-      html[data-theme-selected="true"] #boot-shell {
-        background: var(--boot-background);
-        color: var(--boot-foreground);
-      }
-
-      #boot-shell-card {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 96px;
-        height: 96px;
-      }
-
-      #boot-shell-logo {
-        width: 64px;
-        height: 64px;
-        object-fit: contain;
-      }
-
       /* App CSS locks body and #root scrolling once main loads, so the error screen scrolls itself. */
       #boot-shell:has(> #boot-error) {
         height: 100%;
@@ -450,8 +441,8 @@
       }
 
       #boot-error {
-        --boot-error-fg: #262626;
-        --boot-error-bg: #ffffff;
+        --boot-error-fg: #000000;
+        --boot-error-bg: #c0c0c0;
         --boot-error-line: color-mix(in srgb, currentColor 12%, transparent);
         display: flex;
         flex-direction: column;
@@ -464,8 +455,8 @@
       }
 
       html.dark #boot-error {
-        --boot-error-fg: #f5f5f5;
-        --boot-error-bg: #000000;
+        --boot-error-fg: #e0e0e0;
+        --boot-error-bg: #0a0a0a;
       }
 
       html[data-theme-selected="true"] #boot-error {
@@ -676,8 +667,10 @@
   <body>
     <div id="root">
       <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="MAX splash screen">
-          <img id="boot-shell-logo" src="/max-apple-touch-icon.png" alt="MAX" />
+        <div class="max-boot" data-max-boot="">
+          <div class="max-boot-mark">MAX</div>
+          <p class="max-boot-status" role="status">Connecting…</p>
+          <div class="max-boot-bar" aria-hidden="true"><span></span></div>
         </div>
       </div>
     </div>

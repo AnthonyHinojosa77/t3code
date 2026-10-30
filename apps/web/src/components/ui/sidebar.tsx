@@ -96,11 +96,12 @@ function useSidebarVisibility() {
   return isMobile ? openMobile : open;
 }
 
-// Same breakpoint as useIsMobile, also read when a shortcut fires.
+// Same breakpoint as useIsMobile, also read when a shortcut fires. A provider may supply its
+// own query (MAX treats a sideways phone as a phone); the default keeps stock behaviour.
 const SIDEBAR_MOBILE_QUERY = "(max-width: 767px)";
 
-function isMobileViewport(): boolean {
-  return typeof window !== "undefined" && window.matchMedia(SIDEBAR_MOBILE_QUERY).matches;
+function isMobileViewport(mobileQuery: string): boolean {
+  return typeof window !== "undefined" && window.matchMedia(mobileQuery).matches;
 }
 
 async function persistSidebarOpen(open: boolean) {
@@ -131,7 +132,7 @@ interface SidebarOpenState {
 }
 
 /** Per-provider open state, kept outside React so shortcuts can toggle it at event time. */
-function createSidebarOpenStore(defaultOpen: boolean) {
+function createSidebarOpenStore(defaultOpen: boolean, mobileQuery: string) {
   let state: SidebarOpenState = { open: defaultOpen, openMobile: false };
   const listeners = new Set<() => void>();
   const collapseListeners = new Set<() => void>();
@@ -160,7 +161,8 @@ function createSidebarOpenStore(defaultOpen: boolean) {
     getSnapshot: () => state,
     setOpen,
     setOpenMobile,
-    toggle: () => (isMobileViewport() ? setOpenMobile(!state.openMobile) : setOpen(!state.open)),
+    toggle: () =>
+      isMobileViewport(mobileQuery) ? setOpenMobile(!state.openMobile) : setOpen(!state.open),
     onCollapse: (listener: () => void) => {
       collapseListeners.add(listener);
       return () => {
@@ -172,15 +174,18 @@ function createSidebarOpenStore(defaultOpen: boolean) {
 
 function SidebarProvider({
   defaultOpen = true,
+  mobileQuery = SIDEBAR_MOBILE_QUERY,
   className,
   style,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
+  /** Media query that switches the sidebar to its drawer form. Defaults to the width breakpoint. */
+  mobileQuery?: string;
 }) {
-  const isMobile = useMediaQuery(SIDEBAR_MOBILE_QUERY);
-  const [store] = React.useState(() => createSidebarOpenStore(defaultOpen));
+  const isMobile = useMediaQuery(mobileQuery);
+  const [store] = React.useState(() => createSidebarOpenStore(defaultOpen, mobileQuery));
   const { open, openMobile } = React.useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,

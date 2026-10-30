@@ -18,8 +18,17 @@
     text-shadow: var(--max-wordmark-glow);
   }
 
-  .max-scope :focus-visible {
-    outline: 1px solid var(--max-green);
+  /* Keyboard focus: one quiet ring that follows each control's rounded shape. It appears only
+     after real keyboard use (data-max-input, see maxInputModality.ts), never after a tap or when
+     a script moves focus. T3's own ring on its buttons is turned off inside MAX. */
+  .max-scope :focus-visible,
+  :root:has(.max-scope) [data-slot="sidebar-trigger"]:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+  html[data-max-input="keyboard"] .max-scope :focus-visible,
+  html[data-max-input="keyboard"]:has(.max-scope) [data-slot="sidebar-trigger"]:focus-visible {
+    outline: 2px solid var(--max-focus);
     outline-offset: 2px;
   }
 
@@ -87,6 +96,8 @@
   --max-titlebar-text: var(--max-light);
   --max-wordmark-glow:
     0 0 4px rgba(0, 255, 65, 0.6), 0 0 8px rgba(0, 255, 65, 0.3), 0 0 16px rgba(0, 255, 65, 0.1);
+  /* Focus ring: softened green on dark (still over 3:1 on every MAX surface), navy on light. */
+  --max-focus: color-mix(in srgb, var(--max-green) 72%, transparent);
   --max-radius: 6px;
   --max-bevel-raised: none;
   --max-bevel-inset: none;
@@ -146,6 +157,7 @@
   --max-titlebar: #000080;
   --max-titlebar-text: #ffffff;
   --max-wordmark-glow: none;
+  --max-focus: var(--max-green);
   --max-radius: 0px;
   --max-bevel-raised:
     inset 1px 1px 0 #ffffff, inset -1px -1px 0 #000000, inset 2px 2px 0 #dfdfdf,

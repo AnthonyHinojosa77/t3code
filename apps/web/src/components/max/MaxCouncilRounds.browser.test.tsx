@@ -503,6 +503,8 @@ it("shows approvals still required and removes the note for auto mode", async ()
 it("keeps the round open and displays a restore failure", async () => {
   await phone();
   const { round } = councilFixture();
+  // A finished answer has a page; only pages carry Continue in Agent Mode.
+  round.contenders = [finished(round.contenders[0]!, "2026-10-29T18:00:05Z")];
   using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) =>
     init?.method === "POST"
       ? new Response(JSON.stringify({ error: "Could not restore council thread" }), {
@@ -511,7 +513,8 @@ it("keeps the round open and displays a restore failure", async () => {
       : new Response(JSON.stringify({ round })),
   );
   await using screen = await render(wrapped("round-1"), { router: "/?round=round-1" });
-  await screen.getByRole("button", { name: "Continue in Agent Mode" }).first().click();
+  await currentPage().getByRole("button", { name: "Continue in Agent Mode" }).click();
   await expect.element(screen.getByText("Could not restore council thread")).toBeVisible();
   expect(screen.router?.state.location.pathname).toBe("/");
+  await expect.element(currentPage()).toBeVisible();
 });

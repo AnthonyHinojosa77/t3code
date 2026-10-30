@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
 
+import { APP_BASE_NAME } from "../branding";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import {
@@ -17,6 +18,7 @@ import {
   undoLatestThreadAction,
 } from "../hooks/showThreadUndoNotice";
 import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   isRichTextBoldShortcut,
   resolveShortcutCommand,
@@ -39,6 +41,7 @@ import {
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
 import { MaxCouncilSidebar } from "./max/MaxCouncilSidebar";
+import { MAX_PHONE_LAYOUT_QUERY } from "./max/maxLayout";
 import { useMaxMode } from "./max/maxMode";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
@@ -67,6 +70,8 @@ import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
 import { resolveThreadRouteRef } from "../threadRoutes";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "var(--desktop-window-controls-inset, 90px)";
+// MAX's phone layout follows pointer type as well as width; stock T3 keeps its own breakpoint.
+const IS_MAX = APP_BASE_NAME === "MAX";
 
 function subscribeToViewportWidth(onChange: () => void): () => void {
   window.addEventListener("resize", onChange);
@@ -291,6 +296,10 @@ function SidebarControl() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
+  // A finger cannot hover: on touch MAX shows no tooltip at all, so none can stick to the button
+  // or reappear when focus returns to it after the drawer closes.
+  const touch = useMediaQuery("(pointer: coarse)");
+  const tooltipless = IS_MAX && touch;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
@@ -345,6 +354,16 @@ function SidebarControl() {
       node === null ? undefined : registerAppShellCommands(router, node),
   );
 
+  const trigger = (
+    <SidebarTrigger
+      variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
+      className={cn(
+        "pointer-events-auto",
+        isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
+      )}
+      aria-label="Toggle main sidebar"
+    />
+  );
   return (
     <div
       ref={appShellCommandsRef}
@@ -354,23 +373,16 @@ function SidebarControl() {
       )}
       data-sidebar-control=""
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarTrigger
-              variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
-              className={cn(
-                "pointer-events-auto",
-                isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
-              )}
-              aria-label="Toggle main sidebar"
-            />
-          }
-        />
-        <TooltipPopup side="bottom">
-          Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
-        </TooltipPopup>
-      </Tooltip>
+      {tooltipless ? (
+        trigger
+      ) : (
+        <Tooltip>
+          <TooltipTrigger render={trigger} />
+          <TooltipPopup side="bottom">
+            Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
+          </TooltipPopup>
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -429,6 +441,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
         defaultOpen
         style={sidebarProviderStyle}
+        {...(IS_MAX ? { mobileQuery: MAX_PHONE_LAYOUT_QUERY } : {})}
       >
         <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
         <Sidebar
