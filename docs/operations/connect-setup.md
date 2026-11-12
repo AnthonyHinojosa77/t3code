@@ -6,11 +6,16 @@ provisioning instructions.
 
 ## Public application configuration
 
-T3 Connect is disabled in a fresh clone. To build against the production deployment, copy the
-repository-root example:
+These configuration and account-setup steps are for the human maintainer. Agents must follow the
+current authorization and credential-handling rules; this runbook does not authorize account
+changes, production deployment, secret handling, or editing `.env` files.
+
+T3 Connect is disabled in a fresh clone. To build against the production deployment, a human
+maintainer can create the repository-root `.env` from the example when it does not already exist.
+Preserve existing configuration; do not overwrite an existing `.env`:
 
 ```sh
-cp .env.example .env
+if [ ! -e .env ] && [ ! -L .env ]; then cp .env.example .env; fi
 ```
 
 For another deployment, set these values in the repository-root `.env` or `.env.local`:

@@ -1,7 +1,7 @@
 # T3 Code Mobile
 
-> [!WARNING]
-> T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
+> [!NOTE]
+> This page covers building T3 Code Mobile from source. Public builds are available from the [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) and [Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code) (listings checked 12 November 2026). See the [mobile release instructions](../../docs/operations/release.md#mobile-testflight-and-store-releases) for release channels.
 
 ## Quickstart
 

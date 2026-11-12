@@ -654,7 +654,7 @@ Checklist:
    - preflight passes
    - release quality checks pass
    - `build_bundle` and all platform builds pass
-   - `publish_cli` publishes the exact release version before the release job
+   - `publish_cli` publishes the exact release version after the GitHub Release is published and before hosted web promotion
    - release job uploads expected files
 5. Smoke test downloaded artifacts.
 
