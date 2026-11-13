@@ -1,0 +1,25 @@
+{
+  "content_sha256": "3870b86c6a852c0a442bc4b8e66ad4d727a2b8f20fc533fe9baf3746f2876aa2",
+  "files": {
+    ".agents/skills/adhd/SKILL.md": "960f63d380447ee81da2d86bb1b9fc808dc21f1d6d0fe5e5bd93a2f0d14cf956",
+    ".agents/skills/adhd/agents/openai.yaml": "2e553bb6081fbe4668f62b55ac67cd7f0b76bef0fc3fc82dee4f58955481c0c7",
+    ".agents/skills/brief-me/SKILL.md": "f367a553a1898d085b00b77e352e5d2228b464810873f5781a45a7ba7d3f9877",
+    ".agents/skills/brief-me/agents/openai.yaml": "f6702cb097c04ad0148f3338ea7d26187f9e45c910d0077e7a490a5e013ff740",
+    ".agents/skills/talk-normal/SKILL.md": "1ce4d91747cdda3a8ed02e3091771fe697455af2a57b3e8759a6c57ada3b155c",
+    ".agents/skills/talk-normal/agents/openai.yaml": "0dc52d7240a437a6794e733dda0e430742de01f592b32e2681daddffa1fe081a",
+    "AGENTS.md": "16f09d216d0e2c47f9238e150993a6eb8843719d09dec1bb562c60dcf7db7c66"
+  },
+  "profile": "public-safe",
+  "runtimes": [
+    "codex"
+  ],
+  "schema_version": 1,
+  "skills": [
+    "adhd",
+    "brief-me",
+    "talk-normal"
+  ],
+  "source_commit": null,
+  "source_repository": "https://github.com/AnthonyHinojosa77/my-skills",
+  "toolkit_version": "4.0.0"
+}

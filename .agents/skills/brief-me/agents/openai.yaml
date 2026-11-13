@@ -1,0 +1,6 @@
+interface:
+  display_name: "Brief Me"
+  short_description: "Show the brief by link; update dated progress after work"
+  default_prompt: "Use $brief-me to create or refresh this project's BRIEFME.html and give me the link."
+policy:
+  allow_implicit_invocation: true

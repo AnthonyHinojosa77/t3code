@@ -1,0 +1,6 @@
+{
+  "skillOverrides": {
+    "adhd": "user-invocable-only",
+    "talk-normal": "user-invocable-only"
+  }
+}

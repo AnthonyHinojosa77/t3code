@@ -1,0 +1,6 @@
+interface:
+  display_name: "Talk Normal"
+  short_description: "Rewrite all my recent messages as one plain-language message"
+  default_prompt: "Use $talk-normal to replace everything you sent since my last message with one plain-language message."
+policy:
+  allow_implicit_invocation: false
