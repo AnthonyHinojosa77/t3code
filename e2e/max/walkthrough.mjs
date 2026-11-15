@@ -641,6 +641,7 @@ async function expectModeSwitch(mode) {
       seen.viewport === `${viewport.width}x${viewport.height}` &&
       seen.width === box.width,
   );
+  if (other) summary.modeSwitchComparisons = (summary.modeSwitchComparisons ?? 0) + 1;
   if (other)
     assert(
       Math.abs(other.x - box.x) <= 4,
@@ -1748,6 +1749,7 @@ try {
     await modeTab("Council").click();
     await home();
     await expectModeSwitch("council");
+    assert(summary.modeSwitchComparisons > 0, "The mode switch's position was never compared");
   });
   await step("reload-session", async () => {
     await reloadPage();

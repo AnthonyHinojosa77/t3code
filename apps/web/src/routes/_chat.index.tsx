@@ -101,7 +101,7 @@ function IndexDraftLanding() {
   }
   // A pending environment cannot prove the workspace is empty.
   return bootstrapped ? (
-    <NoProjectsHero headerAction={<MaxAgentModeSwitch className="mr-24 ml-auto" />} />
+    <NoProjectsHero headerAction={<MaxAgentModeSwitch className="ml-auto pr-24" />} />
   ) : null;
 }
 
@@ -109,7 +109,7 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <WorkspacePageHeader electron={isElectron}>
-        <MaxAgentModeSwitch className="mr-24 ml-auto" />
+        <MaxAgentModeSwitch className="ml-auto pr-24" />
       </WorkspacePageHeader>
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
