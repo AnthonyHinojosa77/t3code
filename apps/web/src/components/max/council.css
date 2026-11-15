@@ -292,6 +292,25 @@ html[data-max-input="keyboard"]
   border-radius: var(--max-radius);
   background: var(--max-black);
 }
+/* In T3's Agent headers the switch is the only MAX-scoped thing, so its scope paints nothing. */
+.max-agent-mode-switch {
+  display: flex;
+  flex-shrink: 0;
+  background: transparent;
+}
+/* On a computer, Council's switch is followed by the theme and sign-out buttons and T3's header
+   by its panel buttons. This margin lands the switch on the same spot in both; the walkthrough
+   measures it. */
+@media (min-width: 768px) and (min-height: 501px),
+  (min-width: 768px) and (pointer: fine),
+  (min-width: 768px) and (pointer: none) {
+  .max-agent-mode-switch {
+    margin-right: 73px;
+  }
+  :root:not(.dark) .max-agent-mode-switch {
+    margin-right: 59px;
+  }
+}
 .max-scope .max-segment {
   min-width: 40px;
   min-height: 40px;
@@ -300,12 +319,24 @@ html[data-max-input="keyboard"]
   font-size: 0.75rem;
   color: var(--max-muted);
 }
-.max-scope .max-segment:hover {
+/* The pressed tab keeps its colour under the pointer: after a switch the pointer rests on it. */
+.max-scope .max-segment:not(.max-segment-active):hover {
   color: var(--max-light);
 }
 .max-scope .max-segment-active {
   color: var(--max-green);
   background: var(--max-darker);
+}
+/* Phones: one compact switch in both modes. T3's three panel buttons are wider than the room
+   its header keeps for them, so the margin holds the switch clear of them, and Council uses
+   the same margin to keep the switch on the same spot. */
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+  .max-scope .max-segmented {
+    margin-right: 16px;
+  }
+  .max-scope .max-segment {
+    padding: 0 0.5rem;
+  }
 }
 @media (max-height: 500px) {
   .max-scope .max-header {

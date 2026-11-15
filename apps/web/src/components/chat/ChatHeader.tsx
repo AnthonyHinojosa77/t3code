@@ -40,7 +40,7 @@ import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
-import { MaxCouncilReturn } from "../max/MaxCouncilReturn";
+import { MaxAgentModeSwitch } from "../max/MaxModeSwitch";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -277,14 +277,14 @@ export const ChatHeader = memo(function ChatHeader({
       )}
       onContextMenu={handleHeaderContextMenu}
     >
-      <MaxCouncilReturn />
       <WorkspaceBreadcrumb
         ariaLabel="Thread breadcrumb"
         className="flex-1 overflow-clip [overflow-clip-margin:2px]"
       >
         {activeProject ? (
           <>
-            <WorkspaceBreadcrumbItem className="shrink">
+            {/* On a phone the mode switch needs this room; the thread title stays. */}
+            <WorkspaceBreadcrumbItem className="shrink max-sm:hidden">
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -304,7 +304,7 @@ export const ChatHeader = memo(function ChatHeader({
                 <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
               </Tooltip>
             </WorkspaceBreadcrumbItem>
-            <WorkspaceBreadcrumbSeparator>
+            <WorkspaceBreadcrumbSeparator className="max-sm:hidden">
               <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
             </WorkspaceBreadcrumbSeparator>
           </>
@@ -411,6 +411,7 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
+      <MaxAgentModeSwitch />
     </div>
   );
 });

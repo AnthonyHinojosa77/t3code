@@ -1,16 +1,11 @@
 import { LogOutIcon } from "lucide-react";
 
 import { isElectron } from "../../env";
-import { cn } from "../../lib/utils";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { useMaxLogout } from "./MaxAuthGate";
+import { MaxModeSwitch } from "./MaxModeSwitch";
 import { MaxThemeToggle } from "./MaxThemeToggle";
 import type { MaxMode } from "./maxMode";
-
-const MODE_OPTIONS: ReadonlyArray<{ readonly mode: MaxMode; readonly label: string }> = [
-  { mode: "council", label: "Council" },
-  { mode: "agent", label: "Agent" },
-];
 
 /**
  * MAX top bar. T3's header handles the titlebar drag area, safe area and sidebar toggle inset.
@@ -34,24 +29,7 @@ export function MaxHeader({
           Multi-Model AI Console
         </span>
       </div>
-      <div role="group" aria-label="Mode" className="max-segmented">
-        {MODE_OPTIONS.map((option) => {
-          const pressed = option.mode === mode;
-          return (
-            <button
-              key={option.mode}
-              type="button"
-              aria-pressed={pressed}
-              onClick={() => {
-                if (!pressed) onModeChange(option.mode);
-              }}
-              className={cn("max-segment", pressed && "max-segment-active")}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
+      <MaxModeSwitch mode={mode} onModeChange={onModeChange} />
       <MaxThemeToggle />
       <button
         type="button"

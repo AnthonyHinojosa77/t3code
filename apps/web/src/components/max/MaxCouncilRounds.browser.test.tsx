@@ -6,7 +6,7 @@ import "~/index.css";
 import { act, fakeTimers, render } from "../../../test/render";
 import { MaxCouncilRounds } from "./MaxCouncilRounds";
 import { MaxComposer } from "./MaxComposer";
-import { MaxCouncilReturn } from "./MaxCouncilReturn";
+import { MaxAgentModeSwitch } from "./MaxModeSwitch";
 import { useCouncilHome } from "./councilHome";
 import { EMPTY_COUNCIL_SELECTION, type CouncilSelection } from "./councilSelection";
 import { councilFixture } from "./councilRound.test-fixture";
@@ -226,8 +226,8 @@ it("shows a thinking state, then the first finisher in front, then the synthesis
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/environment-1/thread-1"),
   );
-  await screen.rerender(<MaxCouncilReturn />);
-  await screen.getByRole("button", { name: "Back to Council" }).click();
+  await screen.rerender(<MaxAgentModeSwitch />);
+  await screen.getByRole("button", { name: "Council", exact: true }).click();
   expect(screen.router?.state.location.search).toEqual({ round: "round-1" });
   sessionStorage.removeItem("max.returnRound:/environment-1/thread-1");
 });

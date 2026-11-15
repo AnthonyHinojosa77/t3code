@@ -9,7 +9,7 @@ import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { HostedEmptyState } from "../components/HostedEmptyState";
 import { MaxAppShell } from "../components/max/MaxAppShell";
-import { MaxCouncilReturn } from "../components/max/MaxCouncilReturn";
+import { MaxAgentModeSwitch } from "../components/max/MaxModeSwitch";
 import { resolveMaxIndexView, useMaxMode } from "../components/max/maxMode";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -100,14 +100,16 @@ function IndexDraftLanding() {
     ) : null;
   }
   // A pending environment cannot prove the workspace is empty.
-  return bootstrapped ? <NoProjectsHero headerAction={<MaxCouncilReturn />} /> : null;
+  return bootstrapped ? (
+    <NoProjectsHero headerAction={<MaxAgentModeSwitch className="mr-24 ml-auto" />} />
+  ) : null;
 }
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <WorkspacePageHeader electron={isElectron}>
-        <MaxCouncilReturn />
+        <MaxAgentModeSwitch className="mr-24 ml-auto" />
       </WorkspacePageHeader>
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">

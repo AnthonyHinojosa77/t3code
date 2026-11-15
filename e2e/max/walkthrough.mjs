@@ -340,7 +340,7 @@ async function gates(name) {
       );
       const primary = [
         ...document.querySelectorAll(
-          'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose models"], button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Back to Council"], button[aria-label="Send to council"], .max-button, .max-council-button, .max-icon-button:not(.max-icon-button-small), .max-model-button, .max-council-models button, .max-scope select, .max-panel-new, .max-panel-item, .max-panel-footer-button',
+          'button[type="submit"], [aria-label="Mode"] button, button[aria-label="Choose models"], button[aria-label="Choose contender models"], button[aria-label="Choose synthesizer model"], button[aria-label="Send to council"], .max-button, .max-council-button, .max-icon-button:not(.max-icon-button-small), .max-model-button, .max-council-models button, .max-scope select, .max-panel-new, .max-panel-item, .max-panel-footer-button',
         ),
       ].filter(visible);
       return {
@@ -604,6 +604,53 @@ async function closePanelIfDrawer(via = desktop ? "escape" : "tap") {
 /** Choosing a conversation or New chat closes the drawer by itself; a docked panel stays. */
 async function expectDrawerClosedItself() {
   if (await phoneLayout()) await expect(panel()).toBeHidden();
+}
+// One Council/Agent switch on every MAX screen: the same two tabs, the current mode pressed.
+const modeTab = (name) =>
+  page.getByRole("group", { name: "Mode", exact: true }).getByRole("button", { name, exact: true });
+async function expectModeSwitch(mode) {
+  await expect(page.locator('[aria-label="Mode"]:visible')).toHaveCount(1);
+  await expect(modeTab("Council")).toBeVisible();
+  await expect(modeTab("Agent")).toBeVisible();
+  await expect(modeTab("Council")).toHaveAttribute("aria-pressed", String(mode === "council"));
+  await expect(modeTab("Agent")).toHaveAttribute("aria-pressed", String(mode === "agent"));
+  await expect(page.getByRole("button", { name: "Back to Council" })).toHaveCount(0);
+  const box = await page.locator('[aria-label="Mode"]:visible').boundingBox();
+  const viewport = page.viewportSize();
+  assert(box.x >= 0 && box.x + box.width <= viewport.width, `The ${mode} mode switch overflows`);
+  const crowded = await page.evaluate(() => {
+    const group = [...document.querySelectorAll('[aria-label="Mode"]')].find(
+      (el) => el.getClientRects().length,
+    );
+    const a = group.getBoundingClientRect();
+    return [...document.querySelectorAll("button, a[href], select, input")]
+      .filter((el) => !group.contains(el) && el.getClientRects().length)
+      .filter((el) => {
+        const b = el.getBoundingClientRect();
+        // Only neighbours in the top bar; a control stretched across the page is not one.
+        if (b.width > 200 || b.top >= a.bottom || b.bottom <= a.top) return false;
+        return b.left < a.right && b.right > a.left;
+      })
+      .map((el) => el.getAttribute("aria-label") || el.textContent.trim().slice(0, 30));
+  });
+  assert.deepEqual(crowded, [], `The ${mode} mode switch overlaps: ${crowded.join(", ")}`);
+  // Same spot in both modes. Width tells the two themes' fonts apart, so only like is compared.
+  const other = (summary.modeSwitch ?? []).findLast(
+    (seen) =>
+      seen.mode !== mode &&
+      seen.viewport === `${viewport.width}x${viewport.height}` &&
+      seen.width === box.width,
+  );
+  if (other)
+    assert(
+      Math.abs(other.x - box.x) <= 4,
+      `The mode switch moves ${Math.round(box.x - other.x)}px between Council and Agent`,
+    );
+  (summary.modeSwitch ??= []).push({
+    mode,
+    viewport: `${viewport.width}x${viewport.height}`,
+    ...box,
+  });
 }
 const pages = () => page.getByRole("region", { name: "Council answers", exact: true });
 const position = () => page.locator("[data-page-position]");
@@ -1640,8 +1687,10 @@ try {
       );
     });
     await step("return-same-round", async () => {
-      await page.getByRole("button", { name: "Back to Council" }).click();
+      await expectModeSwitch("agent");
+      await modeTab("Council").click();
       await expect(page).toHaveURL(new RegExp("[?&]round=" + roundId));
+      await expectModeSwitch("council");
     });
     await step("reload-complete-round", async () => {
       await reloadPage();
@@ -1673,7 +1722,8 @@ try {
     });
   }
   await step("agent-mode", async () => {
-    await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await expectModeSwitch("council");
+    await modeTab("Agent").click();
     await expect(page.getByRole("textbox", { name: "Question for the council" })).toHaveCount(0);
   });
   await step("thread-view", async () => {
@@ -1691,34 +1741,36 @@ try {
       );
     }
     // Agent landing automatically opens a local draft for the most recent project.
-    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expect(page.locator(".tiptap:visible").first()).toBeVisible();
+    await expectModeSwitch("agent");
   });
   await step("return-council", async () => {
-    await page.getByRole("button", { name: "Back to Council" }).click();
+    await modeTab("Council").click();
     await home();
+    await expectModeSwitch("council");
   });
   await step("reload-session", async () => {
     await reloadPage();
     await home();
   });
   await step("explicit-appearance-preference", async () => {
-    await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await modeTab("Agent").click();
     await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     await page.evaluate(() => localStorage.setItem("t3code:theme-appearance-mode", "light"));
     await reloadPage();
-    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expectModeSwitch("agent");
     await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     await expect(page.locator("html")).not.toHaveClass(/dark/);
     await expect(page.locator("html")).not.toHaveAttribute("data-max-default-theme");
     await page.evaluate(() => localStorage.removeItem("t3code:theme-appearance-mode"));
     await reloadPage();
-    await expect(page.getByRole("button", { name: "Back to Council" })).toBeVisible();
+    await expectModeSwitch("agent");
     await expect(page.locator(".tiptap:visible").first()).toBeVisible();
     // With no stored preference MAX starts dark: the first-visit default.
     await expect(page.locator("html")).toHaveClass(/dark/);
     await restoreScheme();
     await reloadPage();
-    await page.getByRole("button", { name: "Back to Council" }).click();
+    await modeTab("Council").click();
     await home();
   });
   await step("viewport-matrix", async () => {
